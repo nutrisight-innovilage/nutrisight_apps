@@ -1,7 +1,19 @@
 {
-  "editor.codeActionsOnSave": {
-    "source.fixAll": "explicit",
-    "source.organizeImports": "explicit",
-    "source.sortMembers": "explicit"
-  }
+  "tailwindCSS.includeLanguages": {
+    "javascript": "javascript",
+    "javascriptreact": "html",
+    "typescript": "typescript",
+    "typescriptreact": "html"
+  },
+  "tailwindCSS.classAttributes": [
+    "class",
+    "className",
+    "tw",
+    "headerClassName"
+  ],
+  "tailwindCSS.experimental.classRegex": [
+    "(?:className|class)\\s*[:=]\\s*`([^`]*)`",
+    "(?:className|class)\\s*[:=]\\s*\"([^\"]*)\"",
+    "(?:className|class)\\s*[:=]\\s*'([^']*)'"
+  ]
 }
