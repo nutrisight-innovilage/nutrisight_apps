@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Image,
   Alert,
-  Platform,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
@@ -81,10 +80,8 @@ export default function CameraPage() {
     );
   }
 
-  const handleFoodList = () => {
-    
-    Alert.alert('Fitur ini belum diimplementasikan.');
-   
+  const handleShowFoodList = () => {
+    router.push('/laukList');
   }
 
   const handleTakePhoto = async () => {
@@ -173,70 +170,71 @@ export default function CameraPage() {
   if (showCamera && !capturedImage) {
     return (
       <View className="flex-1 bg-black">
-        {/* Camera View */}
+        {/* Camera View - TANPA CHILDREN */}
         <CameraView
           ref={cameraRef}
-          className="flex-1"
+          style={{ flex: 1 }}
           facing={facing}
-        >
-          {/* Flash overlay */}
-          <Animated.View
-            style={[flashAnimatedStyle]}
-            className="absolute inset-0 bg-white"
-            pointerEvents="none"
+        />
+
+        {/* Overlay UI - DI LUAR CameraView dengan position absolute */}
+        {/* Flash overlay */}
+        <Animated.View
+          style={flashAnimatedStyle}
+          className="absolute inset-0 bg-white"
+          pointerEvents="none"
+        />
+
+        {/* Top Controls */}
+        <View className="absolute top-0 left-0 right-0 pt-12 px-6 flex-row justify-between items-center z-10">
+          <TouchableOpacity
+            onPress={() => {setShowCamera(false); console.log('Tutup kamera');}}
+            className="bg-black/50 rounded-full p-3"
+            activeOpacity={0.75}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={toggleCameraFacing}
+            className="bg-black/50 rounded-full p-3"
+            activeOpacity={0.75}
+          >
+            <Ionicons name="camera-reverse" size={24} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Scan Frame Overlay */}
+        <View className="absolute inset-0 items-center justify-center px-8">
+          <View
+            className="w-full border-4 border-dashed border-white rounded-2xl opacity-60"
+            style={{ height: 256 }}
           />
+        </View>
 
-          {/* Top Controls */}
-          <View className="absolute top-0 left-0 right-0 pt-12 px-6 flex-row justify-between items-center">
+        {/* Bottom Controls */}
+        <View className="absolute bottom-0 left-0 right-0 pb-12 px-6">
+          <Animated.View style={buttonAnimatedStyle}>
             <TouchableOpacity
-              onPress={() => setShowCamera(false)}
-              className="bg-black/50 rounded-full p-3"
+              onPress={handleTakePhoto}
+              className="w-20 h-20 rounded-full border-4 border-white bg-white/30 self-center items-center justify-center"
               activeOpacity={0.75}
             >
-              <Ionicons name="close" size={24} color="#fff" />
+              <View className="w-16 h-16 rounded-full bg-white" />
             </TouchableOpacity>
+          </Animated.View>
 
-            <TouchableOpacity
-              onPress={toggleCameraFacing}
-              className="bg-black/50 rounded-full p-3"
-              activeOpacity={0.75}
-            >
-              <Ionicons name="camera-reverse" size={24} color="#fff" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Scan Frame Overlay */}
-          <View className="absolute inset-0 items-center justify-center px-8">
-            <View
-              className="w-full border-4 border-dashed border-white rounded-2xl opacity-60"
-              style={{ height: 256 }}
-            />
-          </View>
-
-          {/* Bottom Controls */}
-          <View className="absolute bottom-0 left-0 right-0 pb-12 px-6">
-            <Animated.View style={buttonAnimatedStyle}>
-              <TouchableOpacity
-                onPress={handleTakePhoto}
-                className="w-20 h-20 rounded-full border-4 border-white bg-white/30 self-center items-center justify-center"
-                activeOpacity={0.75}
-              >
-                <View className="w-16 h-16 rounded-full bg-white" />
-              </TouchableOpacity>
-            </Animated.View>
-
-            <TouchableOpacity
-              onPress={handlePickImage}
-              className="mt-6 bg-white/90 rounded-xl py-3 flex-row items-center justify-center gap-2"
-              activeOpacity={0.75}
-            >
-              <Ionicons name="image" size={20} color="#333333" />
-              <Text className="text-gray-900 font-semibold text-base">
-                Pilih dari Galeri
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </CameraView>
+          <TouchableOpacity
+            onPress={handlePickImage}
+            className="mt-6 bg-white/90 rounded-xl py-3 flex-row items-center justify-center gap-2"
+            activeOpacity={0.75}
+          >
+            <Ionicons name="image" size={20} color="#333333" />
+            <Text className="text-gray-900 font-semibold text-base">
+              Pilih dari Galeri
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -342,14 +340,15 @@ export default function CameraPage() {
                     Pilih dari Galeri
                   </Text>
                 </TouchableOpacity>
+                
                 <TouchableOpacity
-                  onPress={handleFoodList}
+                  onPress={handleShowFoodList}
                   className="w-full mt-3 bg-overlay rounded-xl py-3 flex-row items-center justify-center gap-2"
                   activeOpacity={0.75}
                 >
-                  <Ionicons name="image" size={20} color="#333333" />
+                  <Ionicons name="search" size={20} color="#333333" />
                   <Text className="text-text-primary font-semibold text-base">
-                    Pilih dari Galeri
+                    Cari Lauk-Pauk Manual
                   </Text>
                 </TouchableOpacity>
               </>
@@ -363,7 +362,7 @@ export default function CameraPage() {
             name="information-circle"
             size={20}
             color="#1F78FF"
-            className="mt-0.5 mr-3 shrink-0"
+            style={{ marginTop: 2, marginRight: 12, flexShrink: 0 }}
           />
           <View className="flex-1">
             <Text className="text-text-primary font-semibold text-sm mb-1">

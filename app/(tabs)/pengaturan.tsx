@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,6 +39,10 @@ function DynamicIcon({
 // ─── Settings Page ────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const [pressedId, setPressedId] = useState<string | null>(null);
+  const handleToPage = (page: string) => {
+    console.log(`Navigate to ${page} page`);
+    router.push(`/pengaturan/${page}` as any);
+  }
 
   const settingsGroups: SettingsGroup[] = [
     {
@@ -48,14 +53,14 @@ export default function SettingsPage() {
           iconName: 'person-outline',
           label: 'Profil',
           description: 'Kelola informasi pribadi Anda',
-          onPress: () => console.log('Profil'),
+          onPress: () => handleToPage('profil'),
         },
         {
           iconLib: 'Ionicons',
           iconName: 'notifications-outline',
           label: 'Notifikasi',
           description: 'Konfigurasi notifikasi aplikasi',
-          onPress: () => console.log('Notifikasi'),
+          onPress: () => handleToPage('notifikasi'),
         },
       ],
     },
@@ -67,14 +72,14 @@ export default function SettingsPage() {
           iconName: 'shield-outlined',
           label: 'informasi Privasi',
           description: 'ketahui kebijakan privasi dan data kami',
-          onPress: () => console.log('Privasi'),
+          onPress: () => handleToPage('termsAndCondition'),
         },
         {
           iconLib: 'MaterialIcons',
           iconName: 'storage',
           label: 'Manajemen Data',
           description: 'Kelola riwayat pemindaian Anda',
-          onPress: () => console.log('Manajemen Data'),
+          onPress: () => handleToPage('manajemenData'),
         },
       ],
     },
@@ -86,7 +91,7 @@ export default function SettingsPage() {
           iconName: 'information-circle-outline',
           label: 'Informasi Aplikasi',
           description: 'Versi 1.0.0',
-          onPress: () => console.log('Info'),
+          onPress: () => handleToPage('informasiAplikasi'),
         },
       ],
     },
