@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { useAuth } from '@/app/contexts/authContext';
+
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,6 +41,27 @@ function DynamicIcon({
 // ─── Settings Page ────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const [pressedId, setPressedId] = useState<string | null>(null);
+   const { user, logout } = useAuth();
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+          },
+        },
+      ]
+    );
+  };
   const handleToPage = (page: string) => {
     console.log(`Navigate to ${page} page`);
     router.push(`/pengaturan/${page}` as any);
@@ -124,15 +147,12 @@ export default function SettingsPage() {
           style={{ elevation: 5 }}
         >
           <View className="flex-row items-center" style={{ gap: 14 }}>
-            {/* Avatar */}
-            <View className="h-[58px] w-[58px] items-center justify-center rounded-full bg-surface">
-              <Ionicons name="person-outline" size={30} color="#37B37E" />
-            </View>
+            
             {/* Info */}
             <View className="flex-1">
-              <Text className="text-lg font-bold text-text-inverse">Pengguna Tamu</Text>
+              <Text className="text-lg font-bold text-text-inverse">{user?.name || 'Pengguna Tamu'}</Text>
               <Text className="mt-0.5 text-xs" style={{ color: '#a7f3d0' }}>
-                tamu@nutrisight.app
+                {user?.phone || user?.email || 'Tidak ada informasi kontak'}
               </Text>
             </View>
           </View>
@@ -205,7 +225,7 @@ export default function SettingsPage() {
         {/* ── Logout Button ─────────────────────────────────────────── */}
         <TouchableOpacity
           activeOpacity={0.7}
-          onPress={() => console.log('Logout')}
+          onPress={() => handleLogout()}
           className="mt-7 flex-row items-center justify-center rounded-lg bg-red-50 py-4"
           style={{ gap: 8, elevation: 2 }}
         >

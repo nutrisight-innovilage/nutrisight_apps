@@ -173,7 +173,7 @@ export default function CameraPage() {
         {/* Camera View - TANPA CHILDREN */}
         <CameraView
           ref={cameraRef}
-          style={{ flex: 1 }}
+          style={{ flex: 1 }} 
           facing={facing}
         />
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import CustomHeader from '../components/customHeader';
+import CustomHeader from '@/app/components/customHeader';
 
 // TODO: masukkan interface NotificationSetting ke types/pengaturan
 interface NotificationSetting {

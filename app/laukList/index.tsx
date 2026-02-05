@@ -15,7 +15,7 @@ import FoodCardItem from './foodCard/foodCardItem';
 import { FoodItem, SortOption } from '@/app/types/food';
 import { fetchMenuItems } from '@/app/services/api';
 import { useCart } from '@/app/contexts/cartContext';
-import CustomHeader from '../components/customHeader';
+import CustomHeader from '@/app/components/customHeader';
 
 const MenuPage = () => {
   const [searchQuery, setSearchQuery] = useState('');

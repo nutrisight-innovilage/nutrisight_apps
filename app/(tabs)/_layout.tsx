@@ -4,7 +4,7 @@ import { Tabs } from 'expo-router'
 import { HeaderShownContext } from '@react-navigation/elements'
 import { BottomTabBar } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons';
-import TabItem from "../components/tabItem"
+import TabItem from "@/app/components/tabItem"
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const _layout = () => {

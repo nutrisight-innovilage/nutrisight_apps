@@ -13,7 +13,7 @@
  * ---------------------------------------------------------------------------
  */
 
-import { CartItem } from '../types/food';
+import { CartItem } from '@/app/types/food';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ---------------------------------------------------------------------------

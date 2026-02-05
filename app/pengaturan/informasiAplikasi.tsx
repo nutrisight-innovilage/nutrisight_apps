@@ -1,7 +1,8 @@
 import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Linking } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import CustomHeader from '../components/customHeader';
+import CustomHeader from '@/app/components/customHeader';
+import { router } from 'expo-router';
 
 export default function InformasiAplikasiPage() {
   const appInfo = {
@@ -224,7 +225,7 @@ export default function InformasiAplikasiPage() {
 
           <TouchableOpacity
             className="bg-surface rounded-lg px-4 py-4 flex-row items-center justify-between"
-            style={{ elevation: 2 }}
+            style={{ elevation: 2 }} onPress={() => router.push("/pengaturan/informasiPrivasi")}
           >
             <View className="flex-row items-center" style={{ gap: 12 }}>
               <Ionicons name="shield-checkmark-outline" size={20} color="#37B37E" />
@@ -242,7 +243,7 @@ export default function InformasiAplikasiPage() {
             © 2025 NutriSight. All rights reserved.
           </Text>
           <Text className="mt-1 text-xs text-text-secondary text-center">
-            Made with ❤️ for healthier living
+            Made with ❤️ for healthier living -ifradil syaifa
           </Text>
         </View>
 

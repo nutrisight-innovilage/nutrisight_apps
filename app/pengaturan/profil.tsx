@@ -1,20 +1,91 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import CustomHeader from '../components/customHeader';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import { useAuth } from '@/app/contexts/authContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const USERS_KEY = '@users_data';
 
 export default function ProfilPage() {
+  const { user, token, updateUser } = useAuth();
+  
   const [nama, setNama] = useState('Pengguna Tamu');
   const [email, setEmail] = useState('tamu@nutrisight.app');
   const [telepon, setTelepon] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  //TODO: buat fungsi handleSave dan simpan perubahan profil
-  const handleSave = () => {
-    setIsEditing(false);
-    console.log('Profile saved:', { nama, email, telepon });
+  // Load user data from AuthContext
+  useEffect(() => {
+    if (user) {
+      setNama(user.name || 'Pengguna Tamu');
+      setEmail(user.email || 'tamu@nutrisight.app');
+      setTelepon(user.phone || '');
+    }
+  }, [user]);
+
+  // Fungsi untuk menyimpan perubahan profil
+  const handleSave = async () => {
+    if (!user) {
+      Alert.alert('Error', 'Anda harus login terlebih dahulu');
+      return;
+    }
+
+    // Validasi input
+    if (!nama.trim()) {
+      Alert.alert('Validasi Error', 'Nama tidak boleh kosong');
+      return;
+    }
+
+    if (!email.trim() || !email.includes('@')) {
+      Alert.alert('Validasi Error', 'Email tidak valid');
+      return;
+    }
+
+    setIsSaving(true);
+
+    try {
+      // Ambil data users dari AsyncStorage
+      const usersJson = await AsyncStorage.getItem(USERS_KEY);
+      const users = usersJson ? JSON.parse(usersJson) : [];
+
+      // Cari dan update user yang sedang login
+      const updatedUsers = users.map((u: any) => {
+        if (u.id === user.id) {
+          return {
+            ...u,
+            name: nama.trim(),
+            email: email.trim(),
+            phone: telepon.trim(),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return u;
+      });
+
+      // Simpan kembali ke AsyncStorage
+      await AsyncStorage.setItem(USERS_KEY, JSON.stringify(updatedUsers));
+
+      // Update user via AuthContext
+      await updateUser({
+        name: nama.trim(),
+        email: email.trim(),
+        phone: telepon.trim(),
+        updatedAt: new Date().toISOString(),
+      });
+      
+      setIsEditing(false);
+      Alert.alert('Berhasil', 'Profil berhasil diperbarui');
+      
+      console.log('Profile saved:', { nama, email, telepon });
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      Alert.alert('Error', 'Gagal menyimpan perubahan profil');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -42,17 +113,7 @@ export default function ProfilPage() {
         contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 20 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Avatar Section */}
-        <View className="items-center mb-6">
-          <View className="h-24 w-24 items-center justify-center rounded-full bg-primary">
-            <Ionicons name="person-outline" size={48} color="#ffffff" />
-          </View>
-          <TouchableOpacity className="mt-3">
-            <Text className="text-sm font-medium text-primary">
-              Ubah Foto Profil
-            </Text>
-          </TouchableOpacity>
-        </View>
+       
 
         {/* Form Section */}
         <View className="bg-surface rounded-lg p-4" style={{ elevation: 2 }}>
@@ -112,11 +173,12 @@ export default function ProfilPage() {
         {isEditing && (
           <TouchableOpacity
             onPress={handleSave}
-            className="mt-6 rounded-lg bg-primary py-4"
+            disabled={isSaving}
+            className={`mt-6 rounded-lg py-4 ${isSaving ? 'bg-gray-400' : 'bg-primary'}`}
             style={{ elevation: 3 }}
           >
             <Text className="text-center text-[15px] font-semibold text-text-inverse">
-              Simpan Perubahan
+              {isSaving ? 'Menyimpan...' : 'Simpan Perubahan'}
             </Text>
           </TouchableOpacity>
         )}
@@ -129,12 +191,19 @@ export default function ProfilPage() {
           
           <View className="flex-row items-center justify-between py-3 border-b border-border">
             <Text className="text-[15px] text-text-secondary">ID Pengguna</Text>
-            <Text className="text-[15px] font-medium text-text-primary">#USR-001</Text>
+            <Text className="text-[15px] font-medium text-text-primary">
+              {user ? `#${user.id}` : '#USR-001'}
+            </Text>
           </View>
           
           <View className="flex-row items-center justify-between py-3 border-b border-border">
             <Text className="text-[15px] text-text-secondary">Bergabung Sejak</Text>
-            <Text className="text-[15px] font-medium text-text-primary">Jan 2025</Text>
+            <Text className="text-[15px] font-medium text-text-primary">
+              {user?.createdAt 
+                ? new Date(user.createdAt).toLocaleDateString('id-ID', { month: 'short', year: 'numeric' })
+                : 'Jan 2025'
+              }
+            </Text>
           </View>
           
           <View className="flex-row items-center justify-between py-3">

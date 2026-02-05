@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import CustomHeader from '../components/customHeader';
+import CustomHeader from '@/app/components/customHeader';
 
 export default function KebijakanPrivasiPage() {
   return (

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import CustomHeader from '../components/customHeader';
+import CustomHeader from '@/app/components/customHeader';
 
 export default function ManajemenDataPage() {
   // Todo: Ganti dengan data nyata dari penyimpanan atau API

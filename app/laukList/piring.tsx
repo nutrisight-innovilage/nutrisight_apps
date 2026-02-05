@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCart } from '@/app/contexts/cartContext';
 import { FoodItem, CartItem } from '@/app/types/food';
 import { fetchMenuItems } from '@/app/services/api';
-import CustomHeader from '../components/customHeader';
+import CustomHeader from '@/app/components/customHeader';
 
 
 // TODO: pindahkan ke types/cart.ts

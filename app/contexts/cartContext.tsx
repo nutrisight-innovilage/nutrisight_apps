@@ -14,7 +14,7 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { CartItem } from '../types/food';
+import { CartItem } from '@/app/types/food';
 import {
   getCart,
   addToCart as apiAddToCart,
@@ -30,7 +30,7 @@ import {
   initializeCart,
   MealMetadata,
   NutritionAnalysisPayload,
-} from '../services/cartApi';
+} from '@/app/services/cartApi';
 
 // ---------------------------------------------------------------------------
 // Context shape (Extended)
