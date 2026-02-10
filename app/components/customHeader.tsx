@@ -24,7 +24,7 @@ export default function CustomHeader({
         router.back();
       } else {
         // Fallback ke /home jika tidak bisa back
-        router.replace('/(tabs)');
+        router.push('/(tabs)');
       }
     } catch (error) {
       // Jika terjadi error, langsung ke /home

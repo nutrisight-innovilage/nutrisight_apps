@@ -1,4 +1,4 @@
-import { NutritionScan, NutritionGoals, WeeklyInsight } from '@/app/types/nutrition';
+import { NutritionScan, NutritionGoals, WeeklyInsight } from '@/app/types/meal';
 
 export const nutritionGoals: NutritionGoals = {
   protein: { min: 20, max: 40, label: 'Protein' },

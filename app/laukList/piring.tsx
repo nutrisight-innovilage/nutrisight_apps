@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useTransition } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
 import Animated, {
@@ -8,38 +8,16 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useCart } from '@/app/contexts/cartContext';
-import { FoodItem, CartItem } from '@/app/types/food';
-import { fetchMenuItems } from '@/app/services/api';
+import { FoodItem } from '@/app/types/food';
+import { RICE_PORTIONS } from '@/app/types/meal';
+import { mapCartToDisplayItems, calculateTotalItems } from '@/app/utils/cartUtils';
 import CustomHeader from '@/app/components/customHeader';
+import LoadingScreen from '@/app/components/loadingScreen';
+import ErrorScreen from '@/app/components/errorScreen';
+import { useMenu } from '@/app/contexts/menuContext';
 
-
-// TODO: pindahkan ke types/cart.ts
-// ---------------------------------------------------------------------------
-// Types lokal
-// ---------------------------------------------------------------------------
-interface CartDisplayItem extends CartItem {
-  foodName: string;
-  description: string;
-  imageUrl: string;
-  category: string;
-}
-
-// Rice portion scale options
-const RICE_PORTIONS = [
-  { value: 0, label: '0 Piring', grams: 0 },
-  { value: 0.25, label: '¼ Piring', grams: 50 },
-  { value: 0.5, label: '½ Piring', grams: 100 },
-  { value: 1, label: '1 Piring', grams: 200 },
-  { value: 1.5, label: '1½ Piring', grams: 300 },
-  { value: 2, label: '2 Piring', grams: 400 },
-  { value: 3, label: '>2 Piring', grams: 500 },
-];
-
-// ---------------------------------------------------------------------------
-// Piring Page
-// ---------------------------------------------------------------------------
 const PiringPage = () => {
-  // ---------- Context cart ----------
+  // ---------- Context ----------
   const {
     cart,
     updateQuantity,
@@ -52,57 +30,41 @@ const PiringPage = () => {
     isLoading: cartLoading,
   } = useCart();
 
+  const { menuData, isLoading: menuLoading, error: menuError, fetchMenu } = useMenu();
+
   // ---------- Local state ----------
-  const [menuData, setMenuData] = useState<FoodItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [isClearing, setIsClearing] = useState(false);
+  
+  // Lazy update untuk operasi yang tidak urgent
+  const [isPending, startTransition] = useTransition();
 
-  // ---------- Fetch semua menu untuk resolusi nama / gambar ----------
-  const fetchMenu = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const data = await fetchMenuItems();
-      setMenuData(data);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal memuat data menu';
-      Alert.alert('Error', msg);
-      console.error('Error fetching menu:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
+  // ---------- Fetch menu jika belum ada ----------
   useEffect(() => {
-    fetchMenu();
-  }, [fetchMenu]);
+    if (menuData.length === 0 && !menuLoading && !menuError) {
+      fetchMenu();
+    }
+  }, [menuData.length, menuLoading, menuError, fetchMenu]);
 
-
-  // TODO: optimasi dengan useMemo dan pindahkan ke service
   // ---------- Gabung cart + menuData → CartDisplayItem[] ----------
-  const cartItems: CartDisplayItem[] = useMemo(() => {
-    return cart
-      .map((cartItem) => {
-        const menuItem = menuData.find((m) => m.id === cartItem.id);
-        if (!menuItem) return null;
-        return { ...cartItem, ...menuItem };
-      })
-      .filter(Boolean) as CartDisplayItem[];
+  const cartItems = useMemo(() => {
+    return mapCartToDisplayItems(cart, menuData);
   }, [cart, menuData]);
 
   // ---------- Total item count ----------
   const totalItems = useMemo(() => {
-    return cart.reduce((sum, item) => sum + item.quantity, 0);
+    return calculateTotalItems(cart);
   }, [cart]);
 
   // ---------- Handlers ----------
-  const handleIncrease = (id: string) => {
+  const handleIncrease = useCallback((id: string) => {
     const item = cart.find((c) => c.id === id);
     if (item) {
       updateQuantity(id, item.quantity + 1);
     }
-  };
+  }, [cart, updateQuantity]);
 
-  const handleDecrease = (id: string) => {
+  const handleDecrease = useCallback((id: string) => {
     const item = cart.find((c) => c.id === id);
     if (!item) return;
 
@@ -111,9 +73,9 @@ const PiringPage = () => {
     } else {
       updateQuantity(id, item.quantity - 1);
     }
-  };
+  }, [cart, updateQuantity]);
 
-  const handleRemove = (id: string) => {
+  const handleRemove = useCallback((id: string) => {
     const item = cartItems.find((c) => c.id === id);
     setRemovingId(id);
 
@@ -124,38 +86,54 @@ const PiringPage = () => {
         Alert.alert('Info', `${item.foodName} dihapus dari piring`);
       }
     }, 300);
-  };
+  }, [cartItems, removeFromCart]);
 
-  const handleClearCart = () => {
+  const handleClearCart = useCallback(() => {
     Alert.alert(
       'Konfirmasi',
-      'Apakah Anda yakin ingin mengosongkan piring?',
+      'Yakin ingin mengosongkan piring?',
       [
-        {
-          text: 'Batal',
-          style: 'cancel',
-        },
+        { text: 'Batal', style: 'cancel' },
         {
           text: 'Ya, Kosongkan',
           style: 'destructive',
-          onPress: () => {
-            clearCart();
-            Alert.alert('Info', 'Piring telah dikosongkan');
+          onPress: async () => {
+            try {
+              setIsClearing(true);
+              await clearCart();
+              
+              // Navigate away immediately
+              router.back();
+              
+              // Alert akan muncul di halaman sebelumnya
+              setTimeout(() => {
+                Alert.alert('Berhasil', 'Piring berhasil dikosongkan');
+              }, 300);
+            } catch (err) {
+              Alert.alert('Error', 'Gagal mengosongkan piring');
+              console.error('[PiringPage] Clear cart error:', err);
+            } finally {
+              setIsClearing(false);
+            }
           },
         },
       ]
     );
-  };
+  }, [clearCart]);
 
-  const handleRicePortionChange = async (portion: number) => {
+  const handleRicePortionChange = useCallback(async (portion: number) => {
     try {
-      await setRicePortion(portion);
+      // Gunakan lazy update untuk perubahan porsi nasi (non-urgent)
+      startTransition(() => {
+        setRicePortion(portion);
+      });
     } catch (err) {
       Alert.alert('Error', 'Gagal mengubah porsi nasi');
+      console.error('[PiringPage] Rice portion error:', err);
     }
-  };
+  }, [setRicePortion]);
 
-  const handleSubmitAnalysis = async () => {
+  const handleSubmitAnalysis = useCallback(async () => {
     if (isEmpty) {
       Alert.alert('Perhatian', 'Tambahkan minimal 1 item makanan untuk dianalisis');
       return;
@@ -185,14 +163,8 @@ const PiringPage = () => {
                     {
                       text: 'OK',
                       onPress: () => {
-                        // TODO: Navigate ke halaman hasil analisis
-                        // router.push(`/analysis/${result.analysisId}`);
-                        
-                        // Sementara: clear cart dan kembali
-                        setTimeout(() => {
-                          clearCart();
-                          router.back();
-                        }, 500);
+                        // Navigate ke home tab untuk melihat hasil
+                        router.push('/(tabs)');
                       },
                     },
                   ]
@@ -202,24 +174,31 @@ const PiringPage = () => {
               }
             } catch (err) {
               Alert.alert('Error', 'Gagal memproses analisis');
+              console.error('[PiringPage] Submit analysis error:', err);
             }
           },
         },
       ]
     );
-  };
+  }, [isEmpty, ricePortion, totalItems, submitAnalysis]);
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
     router.back();
-  };
+  }, []);
 
   // ---------- Loading state ----------
-  if (isLoading) {
+  if (menuLoading && menuData.length === 0) {
+    return <LoadingScreen message="Memuat piring..." />;
+  }
+
+  // ---------- Error state ----------
+  if (menuError && menuData.length === 0) {
     return (
-      <View className="flex-1 bg-background-light justify-center items-center">
-        <ActivityIndicator size="large" color="#37B37E" />
-        <Text className="text-text-secondary-light mt-4 text-base">Memuat piring...</Text>
-      </View>
+      <ErrorScreen
+        title="Gagal Memuat Data"
+        error={menuError}
+        onRetry={fetchMenu}
+      />
     );
   }
 
@@ -281,32 +260,33 @@ const PiringPage = () => {
     <View className="flex-1 bg-surface">
       {/* Header */}
       <Animated.View entering={FadeInUp.duration(600)}>
-       <View className="flex-col gap-2">
-           <View className="flex-5">
-              <CustomHeader
-                heading="Piringku"
-                showBackButton={true}
-              />
-            </View>
-            {/* Tombol hapus semua */}
-            <TouchableOpacity
-              onPress={handleClearCart}
-              className="p-2 rounded-full flex-2 flex-row items-center justify-center mr-4 bg-overlay-light"
-              activeOpacity={0.7}
-            >
-              <Text className="text-xs text-red-500">Kosongkan piring</Text>
-              <Ionicons name="trash-outline" size={22} color="#ef4444" />
-            </TouchableOpacity>
+        <View className="flex-col gap-2">
+          <View className="flex-5">
+            <CustomHeader
+              heading="Piringku"
+              showBackButton={true}
+            />
           </View>
+          {/* Tombol hapus semua */}
+          <TouchableOpacity
+            onPress={handleClearCart}
+            disabled={isClearing || cartLoading}
+            className="p-2 rounded-full flex-2 flex-row items-center justify-center mr-4 bg-overlay-light"
+            activeOpacity={0.7}
+          >
+            <Text className="text-xs text-red-500">Kosongkan piring</Text>
+            <Ionicons name="trash-outline" size={22} color="#ef4444" />
+          </TouchableOpacity>
+        </View>
 
-          {/* Item count badge */}
-          <View className="flex-row items-center mt-3">
-            <View className="bg-overlay-light rounded-full px-3 py-1">
-              <Text className="text-text-secondary-light text-sm font-medium">
-                {totalItems} item di piring
-              </Text>
-            </View>
+        {/* Item count badge */}
+        <View className="flex-row items-center mt-3 px-4">
+          <View className="bg-overlay-light rounded-full px-3 py-1">
+            <Text className="text-text-secondary-light text-sm font-medium">
+              {totalItems} item di piring
+            </Text>
           </View>
+        </View>
       </Animated.View>
 
       {/* Scrollable cart list */}
@@ -331,12 +311,12 @@ const PiringPage = () => {
                 <TouchableOpacity
                   key={portion.value}
                   onPress={() => handleRicePortionChange(portion.value)}
-                  disabled={cartLoading}
+                  disabled={cartLoading || isPending}
                   className={`px-3 py-2 rounded-lg border ${
                     ricePortion === portion.value
                       ? 'bg-primary-light border-primary-light'
                       : 'bg-overlay-light border-border-light'
-                  }`}
+                  } ${isPending ? 'opacity-50' : 'opacity-100'}`}
                   activeOpacity={0.7}
                 >
                   <Text

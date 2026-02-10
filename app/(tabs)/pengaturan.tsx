@@ -4,22 +4,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuth } from '@/app/contexts/authContext';
+import { SettingsGroup, SettingItem } from '@/app/types/pengaturan';
 
 
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-interface SettingItem {
-  iconLib: 'Ionicons' | 'MaterialIcons';
-  iconName: string;
-  label: string;
-  description: string;
-  onPress?: () => void;
-}
-
-interface SettingsGroup {
-  title: string;
-  items: SettingItem[];
-}
 
 // ─── Dynamic Icon ─────────────────────────────────────────────────────────────
 function DynamicIcon({
@@ -92,7 +80,7 @@ export default function SettingsPage() {
       items: [
         {
           iconLib: 'MaterialIcons',
-          iconName: 'shield-outlined',
+          iconName: 'shield',
           label: 'informasi Privasi',
           description: 'ketahui kebijakan privasi dan data kami',
           onPress: () => handleToPage('termsAndCondition'),

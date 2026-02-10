@@ -9,8 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -19,10 +18,14 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { CameraFacing, CapturedPhoto } from '@/app/types/camera';
+import { CameraService } from '@/app/services/cameraAPI';
+import LoadingScreen from '@/app/components/loadingScreen';
+
 export default function CameraPage() {
-  const [facing, setFacing] = useState<CameraType>('back');
+  const [facing, setFacing] = useState<CameraFacing>('back');
   const [permission, requestPermission] = useCameraPermissions();
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [capturedImage, setCapturedImage] = useState<CapturedPhoto | null>(null);
   const [showCamera, setShowCamera] = useState(false);
   const cameraRef = useRef<CameraView>(null);
 
@@ -39,24 +42,14 @@ export default function CameraPage() {
   }));
 
   useEffect(() => {
-    // Request permissions on mount
+    // Request gallery permissions on mount
     (async () => {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(
-          'Izin Diperlukan',
-          'Aplikasi membutuhkan akses ke galeri untuk memilih foto.'
-        );
-      }
+      await CameraService.requestGalleryPermission();
     })();
   }, []);
 
   if (!permission) {
-    return (
-      <View className="flex-1 bg-background items-center justify-center">
-        <Text className="text-text-primary">Memuat...</Text>
-      </View>
-    );
+    return <LoadingScreen message="Memuat..." />;
   }
 
   if (!permission.granted) {
@@ -82,7 +75,7 @@ export default function CameraPage() {
 
   const handleShowFoodList = () => {
     router.push('/laukList');
-  }
+  };
 
   const handleTakePhoto = async () => {
     if (!cameraRef.current) return;
@@ -100,61 +93,45 @@ export default function CameraPage() {
         withTiming(0, { duration: 300 })
       );
 
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
-        base64: false,
-      });
+      const photo = await CameraService.takePhoto(cameraRef.current);
 
       if (photo) {
-        setCapturedImage(photo.uri);
+        setCapturedImage(photo);
         setShowCamera(false);
-        
-        // Di sini Anda bisa mengirim foto ke API untuk analisis
-        console.log('Foto diambil:', photo.uri);
-        
+
         Alert.alert(
           'Foto Berhasil Diambil!',
           'Foto siap untuk dianalisis. Anda bisa menambahkan logika analisis nutrisi di sini.',
           [
             { text: 'Ambil Ulang', onPress: () => setCapturedImage(null) },
-            { text: 'OK', style: 'cancel' }
+            { text: 'OK', style: 'cancel' },
           ]
         );
       }
     } catch (error) {
       console.error('Error mengambil foto:', error);
-      Alert.alert('Error', 'Gagal mengambil foto. Silakan coba lagi.');
     }
   };
 
   const handlePickImage = async () => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [3, 4],
-        quality: 0.8,
-      });
+      const photo = await CameraService.pickImageFromGallery();
 
-      if (!result.canceled && result.assets[0]) {
-        setCapturedImage(result.assets[0].uri);
+      if (photo) {
+        setCapturedImage(photo);
         setShowCamera(false);
-        
-        // Di sini Anda bisa mengirim foto ke API untuk analisis
-        console.log('Gambar dipilih:', result.assets[0].uri);
-        
+
         Alert.alert(
           'Gambar Berhasil Dipilih!',
           'Gambar siap untuk dianalisis. Anda bisa menambahkan logika analisis nutrisi di sini.',
           [
             { text: 'Pilih Ulang', onPress: () => setCapturedImage(null) },
-            { text: 'OK', style: 'cancel' }
+            { text: 'OK', style: 'cancel' },
           ]
         );
       }
     } catch (error) {
       console.error('Error memilih gambar:', error);
-      Alert.alert('Error', 'Gagal memilih gambar. Silakan coba lagi.');
     }
   };
 
@@ -164,18 +141,19 @@ export default function CameraPage() {
   };
 
   const toggleCameraFacing = () => {
-    setFacing(current => (current === 'back' ? 'front' : 'back'));
+    setFacing((current) => (current === 'back' ? 'front' : 'back'));
+  };
+
+  const handleAnalyzePhoto = async () => {
+    if (!capturedImage) return;
+    await CameraService.analyzeFood(capturedImage.uri);
   };
 
   if (showCamera && !capturedImage) {
     return (
       <View className="flex-1 bg-black">
         {/* Camera View - TANPA CHILDREN */}
-        <CameraView
-          ref={cameraRef}
-          style={{ flex: 1 }} 
-          facing={facing}
-        />
+        <CameraView ref={cameraRef} style={{ flex: 1 }} facing={facing} />
 
         {/* Overlay UI - DI LUAR CameraView dengan position absolute */}
         {/* Flash overlay */}
@@ -188,7 +166,10 @@ export default function CameraPage() {
         {/* Top Controls */}
         <View className="absolute top-0 left-0 right-0 pt-12 px-6 flex-row justify-between items-center z-10">
           <TouchableOpacity
-            onPress={() => {setShowCamera(false); console.log('Tutup kamera');}}
+            onPress={() => {
+              setShowCamera(false);
+              console.log('Tutup kamera');
+            }}
             className="bg-black/50 rounded-full p-3"
             activeOpacity={0.75}
           >
@@ -246,7 +227,9 @@ export default function CameraPage() {
     >
       {/* Header */}
       <View className="bg-surface px-6 py-4 shadow-sm">
-        <Text className="text-2xl font-bold text-text-primary">Pindai Makanan</Text>
+        <Text className="text-2xl font-bold text-text-primary">
+          Pindai Makanan
+        </Text>
         <Text className="text-sm text-text-secondary mt-1">
           Ambil foto untuk analisis nutrisi
         </Text>
@@ -259,7 +242,7 @@ export default function CameraPage() {
           <View className="relative bg-gray-900" style={{ aspectRatio: 3 / 4 }}>
             {capturedImage ? (
               <Image
-                source={{ uri: capturedImage }}
+                source={{ uri: capturedImage.uri }}
                 className="w-full h-full"
                 resizeMode="cover"
               />
@@ -290,13 +273,7 @@ export default function CameraPage() {
             {capturedImage ? (
               <>
                 <TouchableOpacity
-                  onPress={() => {
-                    // Di sini tambahkan logika analisis
-                    Alert.alert(
-                      'Analisis Nutrisi',
-                      'Fitur analisis akan diimplementasikan di sini. Foto: ' + capturedImage
-                    );
-                  }}
+                  onPress={handleAnalyzePhoto}
                   className="w-full bg-green-600 rounded-xl py-4 flex-row items-center justify-center gap-2"
                   activeOpacity={0.75}
                 >
@@ -340,7 +317,7 @@ export default function CameraPage() {
                     Pilih dari Galeri
                   </Text>
                 </TouchableOpacity>
-                
+
                 <TouchableOpacity
                   onPress={handleShowFoodList}
                   className="w-full mt-3 bg-overlay rounded-xl py-3 flex-row items-center justify-center gap-2"
@@ -368,10 +345,18 @@ export default function CameraPage() {
             <Text className="text-text-primary font-semibold text-sm mb-1">
               Tips untuk hasil terbaik:
             </Text>
-            <Text className="text-text-secondary text-xs">• Pastikan pencahayaan baik</Text>
-            <Text className="text-text-secondary text-xs">• Pusatkan makanan dalam bingkai</Text>
-            <Text className="text-text-secondary text-xs">• Tangkap seluruh makanan</Text>
-            <Text className="text-text-secondary text-xs">• Hindari bayangan dan silau</Text>
+            <Text className="text-text-secondary text-xs">
+              • Pastikan pencahayaan baik
+            </Text>
+            <Text className="text-text-secondary text-xs">
+              • Pusatkan makanan dalam bingkai
+            </Text>
+            <Text className="text-text-secondary text-xs">
+              • Tangkap seluruh makanan
+            </Text>
+            <Text className="text-text-secondary text-xs">
+              • Hindari bayangan dan silau
+            </Text>
           </View>
         </View>
       </View>

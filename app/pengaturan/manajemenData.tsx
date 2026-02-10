@@ -1,20 +1,44 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import CustomHeader from '@/app/components/customHeader';
+import { useAuth } from '@/app/contexts/authContext';
+import { useRouter } from 'expo-router';
+import { DataManagementService } from '@/app/services/dataManagementAPI';
+import { StorageStats } from '@/app/types/dataManagement';
 
 export default function ManajemenDataPage() {
-  // Todo: Ganti dengan data nyata dari penyimpanan atau API
-  const [storageStats] = useState({
+  const { user, deleteAccount } = useAuth();
+  const router = useRouter();
+  
+  const [storageStats, setStorageStats] = useState<StorageStats>({
     totalScans: 47,
-    storageUsed: 124.5, // MB
-    totalStorage: 500, // MB
+    storageUsed: 124.5,
+    totalStorage: 500,
     images: 89.2,
     data: 35.3,
   });
 
+  // Load storage stats saat component mount
+  useEffect(() => {
+    loadStorageStats();
+  }, []);
 
-  // TODO: Implementasi fungsi clear cache berikut
+  // Fungsi untuk memuat statistik penyimpanan
+  const loadStorageStats = async () => {
+    const stats = await DataManagementService.loadStorageStats();
+    if (stats) {
+      setStorageStats(stats);
+    }
+  };
+
+  // Fungsi untuk update storage stats
+  const updateStorageStats = async (newStats: StorageStats) => {
+    await DataManagementService.updateStorageStats(newStats);
+    setStorageStats(newStats);
+  };
+
+  // Handler untuk clear cache
   const handleClearCache = () => {
     Alert.alert(
       'Hapus Cache',
@@ -24,13 +48,26 @@ export default function ManajemenDataPage() {
         {
           text: 'Hapus',
           style: 'destructive',
-          onPress: () => console.log('Cache cleared'),
+          onPress: async () => {
+            try {
+              await DataManagementService.clearCache();
+
+              // Update storage stats
+              const newStats = DataManagementService.updateStatsAfterClearCache(storageStats);
+              await updateStorageStats(newStats);
+
+              Alert.alert('Berhasil', 'Cache berhasil dihapus');
+            } catch (error) {
+              console.error('Error clearing cache:', error);
+              Alert.alert('Error', 'Gagal menghapus cache');
+            }
+          },
         },
       ]
     );
   };
 
-  // TODO: Implementasi fungsi clear history berikut
+  // Handler untuk clear history
   const handleClearHistory = () => {
     Alert.alert(
       'Hapus Riwayat',
@@ -40,19 +77,48 @@ export default function ManajemenDataPage() {
         {
           text: 'Hapus',
           style: 'destructive',
-          onPress: () => console.log('History cleared'),
+          onPress: async () => {
+            try {
+              await DataManagementService.clearHistory();
+
+              // Reset storage stats
+              const newStats = DataManagementService.resetStatsAfterClearHistory(storageStats);
+              await updateStorageStats(newStats);
+
+              Alert.alert('Berhasil', 'Riwayat pemindaian berhasil dihapus');
+            } catch (error) {
+              console.error('Error clearing history:', error);
+              Alert.alert('Error', 'Gagal menghapus riwayat');
+            }
+          },
         },
       ]
     );
   };
 
-  // TODO: Implementasi fungsi export data berikut
-  const handleExportData = () => {
-    console.log('Export data');
-    Alert.alert('Ekspor Data', 'Data Anda sedang disiapkan untuk diunduh.');
+  // Handler untuk export data
+  const handleExportData = async () => {
+    try {
+      Alert.alert('Ekspor Data', 'Data Anda sedang disiapkan untuk diunduh.');
+
+      // Export data ke file
+      const fileUri = await DataManagementService.exportData(storageStats, user);
+
+      // Share file
+      const shared = await DataManagementService.shareExportedFile(fileUri);
+      
+      if (shared) {
+        Alert.alert('Berhasil', 'Data berhasil diekspor');
+      } else {
+        Alert.alert('Info', `Data disimpan di: ${fileUri}`);
+      }
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      Alert.alert('Error', 'Gagal mengekspor data');
+    }
   };
 
-  // TODO: Implementasi fungsi delete account berikut
+  // Handler untuk delete account
   const handleDeleteAccount = () => {
     Alert.alert(
       'Hapus Akun',
@@ -62,14 +128,61 @@ export default function ManajemenDataPage() {
         {
           text: 'Hapus Akun',
           style: 'destructive',
-          onPress: () => console.log('Account deleted'),
+          onPress: async () => {
+            // Konfirmasi kedua untuk keamanan
+            Alert.alert(
+              'Konfirmasi Terakhir',
+              'Ini adalah tindakan permanen dan tidak dapat dibatalkan. Semua data Anda akan hilang.',
+              [
+                { text: 'Batal', style: 'cancel' },
+                {
+                  text: 'Saya Mengerti, Hapus',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      if (!user) {
+                        Alert.alert('Error', 'Tidak ada user yang login');
+                        return;
+                      }
+
+                      // Hapus akun via context
+                      await deleteAccount();
+
+                      // Hapus semua file user
+                      await DataManagementService.deleteAllUserData();
+
+                      Alert.alert(
+                        'Akun Dihapus',
+                        'Akun Anda telah dihapus. Anda akan diarahkan ke halaman login.',
+                        [
+                          {
+                            text: 'OK',
+                            onPress: () => {
+                              router.replace('/(auth)/login');
+                            },
+                          },
+                        ],
+                        { cancelable: false }
+                      );
+                    } catch (error) {
+                      console.error('Error deleting account:', error);
+                      Alert.alert('Error', 'Gagal menghapus akun. Silakan coba lagi.');
+                    }
+                  },
+                },
+              ]
+            );
+          },
         },
       ]
     );
   };
 
-  // TODO: buat fungsi untuk menghitung persentase penyimpanan yang digunakan
-  const storagePercent = (storageStats.storageUsed / storageStats.totalStorage) * 100;
+  // Hitung persentase penyimpanan
+  const storagePercent = DataManagementService.calculateStoragePercentage(
+    storageStats.storageUsed,
+    storageStats.totalStorage
+  );
 
   return (
     <View className="flex-1 bg-background">

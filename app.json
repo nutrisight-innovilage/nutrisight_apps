@@ -63,7 +63,8 @@
         {
           "photosPermission": "Izinkan $(PRODUCT_NAME) mengakses galeri foto untuk memilih gambar makanan."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,

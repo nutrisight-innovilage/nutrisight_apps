@@ -5,7 +5,6 @@ import {
   Image,
   TouchableOpacity,
   ScrollView,
-  ActivityIndicator,
   Alert,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -20,117 +19,62 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCart } from '@/app/contexts/cartContext';
+import { useMenu } from '@/app/contexts/menuContext';
 import CustomHeader from '@/app/components/customHeader';
-
-// ==================== TYPES ====================
-interface Nutrition {
-  protein: number;
-  fat: number;
-  carbs: number;
-  calories: number;
-  vitamins: string[];
-}
-
-interface FoodItem {
-  id: string;
-  foodName: string;
-  nutrition: Nutrition;
-  recipe: string;
-  imageUrl: string;
-  category: string;
-}
-
-// ==================== DUMMY DATA ====================
-const FOOD_DATA: Record<string, FoodItem> = {
-  '1': {
-    id: '1',
-    foodName: 'Nasi Goreng Spesial',
-    category: 'Main Course',
-    nutrition: {
-      protein: 12,
-      fat: 8,
-      carbs: 45,
-      calories: 320,
-      vitamins: ['B1', 'B12', 'C', 'K'],
-    },
-    recipe: `1. Panaskan minyak di wajan dengan api sedang
-2. Tumis bawang putih dan bawang merah hingga harum
-3. Masukkan telur, orak-arik hingga matang
-4. Tambahkan nasi putih, aduk rata
-5. Beri kecap manis, garam, dan merica
-6. Masak sambil terus diaduk selama 3-5 menit
-7. Sajikan dengan kerupuk dan acar`,
-    imageUrl: 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=400',
-  },
-  '2': {
-    id: '2',
-    foodName: 'Ayam Bakar Madu',
-    category: 'Main Course',
-    nutrition: {
-      protein: 28,
-      fat: 15,
-      carbs: 8,
-      calories: 280,
-      vitamins: ['B6', 'B12', 'D', 'E'],
-    },
-    recipe: `1. Bersihkan ayam, lumuri dengan air jeruk nipis
-2. Campurkan bumbu: bawang putih, jahe, kecap, madu
-3. Marinasi ayam minimal 2 jam di kulkas
-4. Panaskan panggangan atau oven 180°C
-5. Bakar ayam sambil sesekali diolesi bumbu
-6. Balik setiap 10 menit hingga matang merata (30-40 menit)
-7. Sajikan dengan sambal dan lalapan`,
-    imageUrl: 'https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400',
-  },
-  '3': {
-    id: '3',
-    foodName: 'Gado-Gado',
-    category: 'Salad',
-    nutrition: {
-      protein: 10,
-      fat: 12,
-      carbs: 25,
-      calories: 250,
-      vitamins: ['A', 'C', 'E', 'K'],
-    },
-    recipe: `1. Rebus sayuran: kol, kangkung, tauge, wortel
-2. Goreng tempe dan tahu hingga kecokelatan
-3. Blender bumbu kacang: kacang tanah, cabai, gula merah, air asam
-4. Tata sayuran, tempe, tahu di piring
-5. Siram dengan bumbu kacang
-6. Tambahkan telur rebus dan kerupuk
-7. Sajikan hangat`,
-    imageUrl: 'https://images.unsplash.com/photo-1512058564366-18510be2db19?w=400',
-  },
-};
+import LoadingScreen from '@/app/components/loadingScreen';
+import ErrorScreen from '@/app/components/errorScreen';
+import { FoodItemDetail } from '@/app/types/food';
 
 // ==================== MAIN COMPONENT ====================
 export default function CardScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [recipeExpanded, setRecipeExpanded] = useState(false);
-  const [foodData, setFoodData] = useState<FoodItem | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [foodData, setFoodData] = useState<FoodItemDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Cart context
+  // Context hooks
   const { addToCart, cart } = useCart();
+  const { getFoodDetail, getCachedFoodDetail } = useMenu();
 
-  // ==================== DATA FETCHING ====================
+  // ==================== DATA LOADING ====================
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      
-      // Simulasi API call dengan delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      const data = FOOD_DATA[id as string];
-      setFoodData(data || null);
-      setLoading(false);
+    const loadFoodDetail = async () => {
+      if (!id) {
+        setError('ID makanan tidak valid');
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        // Check cache first for instant display
+        const cached = getCachedFoodDetail(id);
+        if (cached) {
+          setFoodData(cached);
+          setIsLoading(false);
+          console.log('Loaded from cache:', cached);
+          return;
+        }
+
+        // Fetch detailed data from API
+        const detail = await getFoodDetail(id);
+        setFoodData(detail);
+        console.log('Loaded food detail:', detail);
+        
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Gagal memuat detail makanan';
+        setError(errorMessage);
+        console.error('Error loading food detail:', err);
+      } finally {
+        setIsLoading(false);
+      }
     };
 
-    if (id) {
-      loadData();
-    }
-  }, [id]);
+    loadFoodDetail();
+  }, [id, getFoodDetail, getCachedFoodDetail]);
 
   // ==================== ANIMATED STYLES ====================
   const arrowRotation = useAnimatedStyle(() => {
@@ -159,47 +103,39 @@ export default function CardScreen() {
     }
   };
 
+  const handleRetry = async () => {
+    if (!id) return;
+    
+    try {
+      setIsLoading(true);
+      setError(null);
+      const detail = await getFoodDetail(id);
+      setFoodData(detail);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Gagal memuat detail makanan';
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Check if item is already in cart
   const itemInCart = cart.find(item => item.id === id);
   const cartQuantity = itemInCart?.quantity || 0;
 
   // ==================== LOADING STATE ====================
-  if (loading) {
-    return (
-      <SafeAreaView className="flex-1 bg-white justify-center items-center">
-        <ActivityIndicator size="large" color="#10b981" />
-        <Text className="mt-4 text-gray-600 text-base">Memuat data...</Text>
-      </SafeAreaView>
-    );
+  if (isLoading) {
+    return <LoadingScreen message="Memuat detail makanan..." />;
   }
 
   // ==================== ERROR STATE ====================
-  if (!foodData) {
+  if (error || !foodData) {
     return (
-      <SafeAreaView className="flex-1 bg-white justify-center items-center px-6">
-        <Animated.View entering={FadeIn.duration(300)}>
-          <View className="items-center">
-            <View className="bg-red-100 rounded-full p-6 mb-4">
-              <MaterialIcons name="error-outline" size={48} color="#ef4444" />
-            </View>
-            <Text className="text-xl font-bold text-gray-900 mt-2">
-              Makanan Tidak Ditemukan
-            </Text>
-            <Text className="text-gray-500 text-center mt-2 text-base">
-              Makanan dengan ID "{id}" tidak ada dalam database
-            </Text>
-            <TouchableOpacity
-              onPress={handleBack}
-              className="mt-6 bg-emerald-500 px-8 py-3 rounded-xl shadow-lg"
-              activeOpacity={0.8}
-            >
-              <Text className="text-white font-semibold text-base">
-                Kembali
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      </SafeAreaView>
+      <ErrorScreen 
+        title="Gagal Memuat Detail"
+        error={error || `Makanan dengan ID "${id}" tidak ditemukan`}
+        onRetry={handleRetry}
+      />
     );
   }
 
@@ -212,8 +148,7 @@ export default function CardScreen() {
           heading={foodData.foodName}
           subHeading={foodData.category}
           showBackButton={true}
-          />    
-          <View className="w-10" />
+        />    
       </Animated.View>
 
       {/* ==================== SCROLLABLE CONTENT ==================== */}
@@ -351,44 +286,60 @@ export default function CardScreen() {
           </View>
         </Animated.View>
 
-        {/* ==================== RECIPE SECTION ==================== */}
-        <Animated.View entering={FadeInUp.delay(600).duration(500)}>
-          <View className="mx-4 mt-6 mb-4 bg-gray-50 rounded-2xl overflow-hidden border border-gray-200">
-            {/* Recipe Header */}
-            <TouchableOpacity
-              onPress={() => setRecipeExpanded(!recipeExpanded)}
-              className="flex-row justify-between items-center p-4"
-              activeOpacity={0.7}
-            >
-              <View className="flex-row items-center">
-                <View className="bg-gray-200 rounded-full p-2">
-                  <MaterialIcons name="restaurant-menu" size={18} color="#4b5563" />
-                </View>
-                <Text className="text-base font-bold text-gray-900 ml-3">
-                  Cara Memasak
-                </Text>
-              </View>
-              <Animated.View style={arrowRotation}>
-                <MaterialIcons 
-                  name="expand-more" 
-                  size={24} 
-                  color="#6b7280" 
-                />
-              </Animated.View>
-            </TouchableOpacity>
+        {/* ==================== DESCRIPTION ==================== */}
+        {foodData.description && (
+          <Animated.View entering={FadeInUp.delay(550).duration(500)}>
+            <View className="mx-4 mt-6">
+              <Text className="text-base font-bold text-gray-900 mb-2">
+                Deskripsi
+              </Text>
+              <Text className="text-sm text-gray-600 leading-6">
+                {foodData.description}
+              </Text>
+            </View>
+          </Animated.View>
+        )}
 
-            {/* Recipe Content with Animation */}
-            {recipeExpanded && (
-              <Animated.View entering={FadeInDown.duration(300)}>
-                <View className="px-4 pb-4 pt-2 border-t border-gray-200">
-                  <Text className="text-sm text-gray-700 leading-6">
-                    {foodData.recipe}
+        {/* ==================== RECIPE SECTION ==================== */}
+        {foodData.recipe && (
+          <Animated.View entering={FadeInUp.delay(600).duration(500)}>
+            <View className="mx-4 mt-6 mb-4 bg-gray-50 rounded-2xl overflow-hidden border border-gray-200">
+              {/* Recipe Header */}
+              <TouchableOpacity
+                onPress={() => setRecipeExpanded(!recipeExpanded)}
+                className="flex-row justify-between items-center p-4"
+                activeOpacity={0.7}
+              >
+                <View className="flex-row items-center">
+                  <View className="bg-gray-200 rounded-full p-2">
+                    <MaterialIcons name="restaurant-menu" size={18} color="#4b5563" />
+                  </View>
+                  <Text className="text-base font-bold text-gray-900 ml-3">
+                    Cara Memasak
                   </Text>
                 </View>
-              </Animated.View>
-            )}
-          </View>
-        </Animated.View>
+                <Animated.View style={arrowRotation}>
+                  <MaterialIcons 
+                    name="expand-more" 
+                    size={24} 
+                    color="#6b7280" 
+                  />
+                </Animated.View>
+              </TouchableOpacity>
+
+              {/* Recipe Content with Animation */}
+              {recipeExpanded && (
+                <Animated.View entering={FadeInDown.duration(300)}>
+                  <View className="px-4 pb-4 pt-2 border-t border-gray-200">
+                    <Text className="text-sm text-gray-700 leading-6">
+                      {foodData.recipe}
+                    </Text>
+                  </View>
+                </Animated.View>
+              )}
+            </View>
+          </Animated.View>
+        )}
 
         {/* Bottom Spacing for Floating Button */}
         <View className="h-24" />

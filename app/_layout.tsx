@@ -2,10 +2,10 @@ import "./globals.css"
 import 'react-native-gesture-handler';
 import 'react-native-svg';
 import { CartProvider } from './contexts/cartContext';
-
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from '@/app/contexts/authContext';
+import { MenuProvider } from "./contexts/menuContext";
 
 function RootLayoutNav() {
   const { isAuthenticated, loading } = useAuth();
@@ -20,38 +20,35 @@ function RootLayoutNav() {
     const inProtectedRoute = inTabsGroup || segments[0] === 'pengaturan' || segments[0] === 'laukList';
 
     if (!isAuthenticated && inProtectedRoute) {
-      // Redirect to login if not authenticated and trying to access protected routes
       router.replace('/(auth)/login');
     } else if (isAuthenticated && inAuthGroup) {
-      // Redirect to app if authenticated and on auth screens
       router.replace('/(tabs)');
     }
-  }, [isAuthenticated, segments, loading, router]);
+  }, [isAuthenticated, segments, loading]);
 
-  return (
-    <CartProvider>
-      <Stack screenOptions={{ headerShown: false }}>
-        {/* Auth routes - accessible when NOT authenticated */}
-        <Stack.Screen 
-          name="(auth)"
-          options={{ headerShown: false }}
-        />
-        
-        {/* Protected routes - accessible when authenticated */}
-        <Stack.Screen 
-          name="(tabs)"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen 
-          name="pengaturan"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="laukList"
-          options={{ headerShown: false }}
-        />
-      </Stack>
-    </CartProvider>
+  return ( 
+    <MenuProvider>
+      <CartProvider>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen 
+            name="(auth)"
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen 
+            name="(tabs)"
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen 
+            name="pengaturan"
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="laukList"
+            options={{ headerShown: false }}
+          />
+        </Stack>
+      </CartProvider>
+    </MenuProvider>
   );
 }
 

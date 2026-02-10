@@ -4,12 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useAuth } from '@/app/contexts/authContext';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-const USERS_KEY = '@users_data';
 
 export default function ProfilPage() {
-  const { user, token, updateUser } = useAuth();
+  const { user, updateUser } = useAuth();
   
   const [nama, setNama] = useState('Pengguna Tamu');
   const [email, setEmail] = useState('tamu@nutrisight.app');
@@ -26,7 +23,6 @@ export default function ProfilPage() {
     }
   }, [user]);
 
-  // Fungsi untuk menyimpan perubahan profil
   const handleSave = async () => {
     if (!user) {
       Alert.alert('Error', 'Anda harus login terlebih dahulu');
@@ -47,39 +43,14 @@ export default function ProfilPage() {
     setIsSaving(true);
 
     try {
-      // Ambil data users dari AsyncStorage
-      const usersJson = await AsyncStorage.getItem(USERS_KEY);
-      const users = usersJson ? JSON.parse(usersJson) : [];
-
-      // Cari dan update user yang sedang login
-      const updatedUsers = users.map((u: any) => {
-        if (u.id === user.id) {
-          return {
-            ...u,
-            name: nama.trim(),
-            email: email.trim(),
-            phone: telepon.trim(),
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return u;
-      });
-
-      // Simpan kembali ke AsyncStorage
-      await AsyncStorage.setItem(USERS_KEY, JSON.stringify(updatedUsers));
-
-      // Update user via AuthContext
       await updateUser({
         name: nama.trim(),
         email: email.trim(),
         phone: telepon.trim(),
-        updatedAt: new Date().toISOString(),
       });
       
       setIsEditing(false);
       Alert.alert('Berhasil', 'Profil berhasil diperbarui');
-      
-      console.log('Profile saved:', { nama, email, telepon });
     } catch (error) {
       console.error('Error saving profile:', error);
       Alert.alert('Error', 'Gagal menyimpan perubahan profil');
@@ -91,30 +62,27 @@ export default function ProfilPage() {
   return (
     <SafeAreaView className="flex-1 bg-background">
       {/* Header */}
-      
       <View className="flex-row items-center justify-between m-4">
-   
-          <TouchableOpacity onPress={() => {setIsEditing(false); router.back()}} className="p-2">
-            <Ionicons name="chevron-back" size={24} color="#000000" />
-          </TouchableOpacity>
-             <TouchableOpacity onPress={() => setIsEditing(!isEditing)}
-            className="rounded-full bg-accent p-2"
-          >
-            <Ionicons
-              name={isEditing ? 'close-outline' : 'pencil-outline'}
-              size={20}
-              color="#ffffff"
-            />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity onPress={() => {setIsEditing(false); router.back()}} className="p-2">
+          <Ionicons name="chevron-back" size={24} color="#000000" />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          onPress={() => setIsEditing(!isEditing)}
+          className="rounded-full bg-accent p-2"
+        >
+          <Ionicons
+            name={isEditing ? 'close-outline' : 'pencil-outline'}
+            size={20}
+            color="#ffffff"
+          />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         className="flex-1"
         contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 20 }}
         showsVerticalScrollIndicator={false}
       >
-       
-
         {/* Form Section */}
         <View className="bg-surface rounded-lg p-4" style={{ elevation: 2 }}>
           {/* Nama */}

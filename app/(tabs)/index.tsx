@@ -3,65 +3,58 @@ import { Text, View, ScrollView, Pressable, Alert } from 'react-native';
 import { VictoryPie } from 'victory-native';
 import Svg from 'react-native-svg';
 import { Feather } from '@expo/vector-icons';
-import { NutritionScan, ChartDataPoint } from '@/app/types/nutrition';
+import { NutritionScan, ChartDataPoint } from '@/app/types/meal';
 import { 
   checkNutritionStatus, 
   calculateWeeklyInsight, 
   nutritionGoals 
 } from '@/app/utils/nutritionUtils';
-import { NutritionAPI, mockScans } from '@/app/services/nutritionAPI';
+import { useCart } from '@/app/contexts/cartContext';
 import FoodHistoryCard from '@/app/components/foodHistoryCard';
 import WeeklyInsightCard from '@/app/components/weeklyInsightCard';
 import AddFoodModal from '@/app/components/addFoodModal';
+import LoadingScreen from '@/app/components/loadingScreen';
 
 export default function Index() {
-  const [scans, setScans] = useState<NutritionScan[]>(mockScans);
+  const { 
+    recentScans, 
+    isLoadingScans, 
+    refreshScans,
+    deleteScan,
+    lastSubmittedScan
+  } = useCart();
+  
   const [modalVisible, setModalVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
-  // Load data dari API saat component mount
+  // Load data dari context saat component mount
   useEffect(() => {
     loadScans();
   }, []);
 
   const loadScans = async () => {
     try {
-      setIsLoading(true);
-      // Uncomment untuk menggunakan API sebenarnya
-      // const data = await NutritionAPI.getAllScans();
-      // setScans(data);
-      
-      // Untuk sementara menggunakan mock data
-      setScans(mockScans);
+      setInitialLoading(true);
+      await refreshScans();
     } catch (error) {
       console.error('Error loading scans:', error);
       Alert.alert('Error', 'Gagal memuat data');
     } finally {
-      setIsLoading(false);
+      setInitialLoading(false);
     }
   };
 
   const handleAddScan = async (scanData: Omit<NutritionScan, 'id'>) => {
     try {
-      setIsLoading(true);
+      // Untuk sementara, karena context belum punya createScan,
+      // kita bisa tambahkan fungsi ini ke context atau gunakan API langsung
+      // Sementara ini akan di-handle oleh modal atau komponen lain
       
-      // Uncomment untuk menggunakan API sebenarnya
-      // const newScan = await NutritionAPI.createScan(scanData);
-      // setScans([newScan, ...scans]);
-      
-      // Untuk sementara tambahkan ke state lokal
-      const newScan: NutritionScan = {
-        ...scanData,
-        id: Date.now().toString(),
-      };
-      setScans([newScan, ...scans]);
-      
-      Alert.alert('Berhasil', 'Data makanan berhasil ditambahkan');
+      Alert.alert('Info', 'Fitur tambah manual sedang dalam pengembangan. Gunakan fitur scan dari tab lain.');
+      setModalVisible(false);
     } catch (error) {
       console.error('Error adding scan:', error);
       Alert.alert('Error', 'Gagal menambahkan data');
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -76,10 +69,7 @@ export default function Index() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Uncomment untuk menggunakan API sebenarnya
-              // await NutritionAPI.deleteScan(id);
-              
-              setScans(scans.filter(scan => scan.id !== id));
+              await deleteScan(id);
               Alert.alert('Berhasil', 'Data berhasil dihapus');
             } catch (error) {
               console.error('Error deleting scan:', error);
@@ -91,8 +81,13 @@ export default function Index() {
     );
   };
 
+  // Tampilkan loading screen saat initial load
+  if (initialLoading && recentScans.length === 0) {
+    return <LoadingScreen message="Memuat data nutrisi..." />;
+  }
+
   // Latest scan untuk chart
-  const latestScan = scans[0];
+  const latestScan = recentScans[0];
 
   // Chart data
   const chartData: ChartDataPoint[] = latestScan ? [
@@ -105,7 +100,7 @@ export default function Index() {
   const nutritionStatus = latestScan ? checkNutritionStatus(latestScan) : null;
 
   // Weekly insight
-  const weeklyInsight = calculateWeeklyInsight(scans);
+  const weeklyInsight = calculateWeeklyInsight(recentScans);
 
   return (
     <View className="flex-1 bg-gray-50">
@@ -294,11 +289,15 @@ export default function Index() {
               Riwayat Pemindaian
             </Text>
             <Text className="text-sm text-gray-500">
-              {scans.length} makanan
+              {recentScans.length} makanan
             </Text>
           </View>
           
-          {scans.length === 0 ? (
+          {isLoadingScans && recentScans.length === 0 ? (
+            <View className="bg-white rounded-xl p-8 items-center">
+              <Text className="text-gray-500">Memuat data...</Text>
+            </View>
+          ) : recentScans.length === 0 ? (
             <View className="bg-white rounded-xl p-8 items-center">
               <Feather name="inbox" size={48} color="#d1d5db" />
               <Text className="text-gray-500 mt-4 text-center">
@@ -307,7 +306,7 @@ export default function Index() {
             </View>
           ) : (
             <View className="space-y-3">
-              {scans.map((scan, index) => (
+              {recentScans.map((scan, index) => (
                 <FoodHistoryCard 
                   key={scan.id} 
                   scan={scan} 

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { Text, View, Animated } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { WeeklyInsight } from '@/app/types/nutrition';
+import { WeeklyInsight } from '@/app/types/meal';
 
 interface WeeklyInsightCardProps {
   insight: WeeklyInsight;
@@ -37,8 +38,11 @@ export default function WeeklyInsightCard({ insight }: WeeklyInsightCardProps) {
         transform: [{ translateY: slideAnim }],
       }}
     >
-      <View 
-        className="bg-gradient-to-br from-primary to-primary/80 mx-4 mt-4 rounded-2xl p-6"
+      <LinearGradient
+        colors={['#10b981', '#059669']} // Sesuaikan dengan warna primary Anda
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        className="mx-4 mt-4 rounded-2xl p-6"
         style={{
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 4 },
@@ -165,7 +169,7 @@ export default function WeeklyInsightCard({ insight }: WeeklyInsightCardProps) {
             </Text>
           </View>
         </View>
-      </View>
+      </LinearGradient>
     </Animated.View>
   );
 }

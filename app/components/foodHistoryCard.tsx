@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Text, View, Animated, Pressable } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { NutritionScan } from '@/app/types/nutrition';
+import { NutritionScan } from '@/app/types/meal';
 
 interface FoodHistoryCardProps {
   scan: NutritionScan;

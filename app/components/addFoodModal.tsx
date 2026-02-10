@@ -10,7 +10,7 @@ import {
   Platform 
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { NutritionScan } from '@/app/types/nutrition';
+import { NutritionScan } from '@/app/types/meal';
 import { formatDate, formatTime } from '@/app/utils/nutritionUtils';
 
 interface AddFoodModalProps {

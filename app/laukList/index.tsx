@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, FlatList, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useMemo, useCallback, memo } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, FlatList, Alert } from 'react-native';
 import { router } from 'expo-router';
 import Animated, { 
   FadeInDown, 
@@ -13,142 +13,189 @@ import SearchBox from '@/app/components/searchBox';
 import Card from '@/app/components/card';
 import FoodCardItem from './foodCard/foodCardItem';
 import { FoodItem, SortOption } from '@/app/types/food';
-import { fetchMenuItems } from '@/app/services/api';
 import { useCart } from '@/app/contexts/cartContext';
+import { useMenu } from '@/app/contexts/menuContext';
 import CustomHeader from '@/app/components/customHeader';
+import LoadingScreen from '@/app/components/loadingScreen';
+import ErrorScreen from '@/app/components/errorScreen';
+import { filterAndSortMenu } from '@/app/utils/menuUtils';
+
+// Memoized MenuItem Component untuk optimasi render
+const MenuItem = memo<{ 
+  item: FoodItem; 
+  index: number; 
+  onNavigate: (id: string) => void;
+}>(({ item, index, onNavigate }) => {
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 100).springify()}>
+      <View className="mb-4">
+        <Card onPress={() => onNavigate(item.id)}>
+          <FoodCardItem
+            id={item.id}
+            name={item.foodName}
+            description={item.description}
+            imageUrl={item.imageUrl}
+          />
+        </Card>
+      </View>
+    </Animated.View>
+  );
+});
+
+MenuItem.displayName = 'MenuItem';
+
+// Memoized CategoryFilter Component
+const CategoryFilter = memo<{
+  categories: string[];
+  selectedCategory: string;
+  onSelectCategory: (category: string) => void;
+}>(({ categories, selectedCategory, onSelectCategory }) => {
+  return (
+    <Animated.View entering={FadeInUp.delay(200).duration(600)}>
+      <View className="bg-surface-light border-b border-border-light">
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          className="py-3 px-4"
+          contentContainerStyle={{ paddingRight: 16 }}
+        >
+          {categories.map((category) => (
+            <TouchableOpacity
+              key={category}
+              onPress={() => onSelectCategory(category)}
+              className={`mr-3 px-5 py-2.5 rounded-full ${
+                selectedCategory === category
+                  ? 'bg-primary-light shadow-sm'
+                  : 'bg-overlay-light border border-border-light'
+              }`}
+              activeOpacity={0.7}
+            >
+              <Text
+                className={`font-semibold text-sm ${
+                  selectedCategory === category
+                    ? 'text-text-inverse-light'
+                    : 'text-text-primary-light'
+                }`}
+              >
+                {category}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+    </Animated.View>
+  );
+});
+
+CategoryFilter.displayName = 'CategoryFilter';
+
+// Memoized SortDropdown Component
+const SortDropdown = memo<{
+  sortOptions: { value: SortOption; label: string }[];
+  sortBy: SortOption;
+  onSelectSort: (value: SortOption) => void;
+}>(({ sortOptions, sortBy, onSelectSort }) => {
+  return (
+    <Animated.View entering={FadeInDown.duration(300)}>
+      <View className="bg-surface-light mx-4 mt-2 rounded-xl shadow-lg overflow-hidden border border-border-light">
+        {sortOptions.map((option, index) => (
+          <TouchableOpacity
+            key={option.value}
+            onPress={() => onSelectSort(option.value)}
+            className={`px-4 py-3.5 ${
+              index < sortOptions.length - 1 ? 'border-b border-border-light' : ''
+            } ${sortBy === option.value ? 'bg-overlay-light' : ''}`}
+            activeOpacity={0.7}
+          >
+            <View className="flex-row items-center justify-between">
+              <Text
+                className={`text-sm ${
+                  sortBy === option.value
+                    ? 'text-primary-light font-semibold'
+                    : 'text-text-primary-light font-medium'
+                }`}
+              >
+                {option.label}
+              </Text>
+              {sortBy === option.value && (
+                <Ionicons name="checkmark" size={20} color="#37B37E" />
+              )}
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </Animated.View>
+  );
+});
+
+SortDropdown.displayName = 'SortDropdown';
 
 const MenuPage = () => {
+  // Local UI states
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
   const [sortBy, setSortBy] = useState<SortOption>('name-asc');
   const [showSortOptions, setShowSortOptions] = useState(false);
 
-  // Cart dari global context
-  const { cart, addToCart, totalItems } = useCart();
-  
-  // Service states
-  const [menuData, setMenuData] = useState<FoodItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Global contexts - Updated to use cart from cartContext
+  const { cart, addToCart, totalItems, isLoading: cartLoading } = useCart();
+  const { menuData, categories, isLoading, isRefreshing, error, refreshMenu, fetchMenu } = useMenu();
   
   const cartScale = useSharedValue(1);
 
-
-  // TODO: pindahin fetching ke context dan API service layer
-  // Fetch menu data
-  const fetchMenu = async (showRefreshIndicator = false) => {
-    try {
-      if (showRefreshIndicator) {
-        setIsRefreshing(true);
-      } else {
-        setIsLoading(true);
-      }
-      setError(null);
-
-      const data = await fetchMenuItems();
-      setMenuData(data);
-      
-      if (showRefreshIndicator) {
-        Alert.alert('Berhasil', 'Menu berhasil diperbarui!');
-      }
-
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Gagal memuat data menu';
-      setError(errorMessage);
-      Alert.alert('Error', errorMessage);
-      console.error('Error fetching menu:', err);
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  };
-
-  // Initial load
-  useEffect(() => {
-    fetchMenu();
-  }, []);
-
-  // TODO: extract kategori ke context atau util function
-  // Kategori yang tersedia - extract dari data
-  const categories = useMemo(() => {
-    const uniqueCategories = Array.from(
-      new Set(menuData.map(item => item.category).filter(Boolean))
-    ) as string[];
-    return ['Semua', ...uniqueCategories];
-  }, [menuData]);
-
-  // TODO: extract filter & sort logic ke util function
-  // Filter dan sort data
+  // Filter and sort data using utility function with memoization
   const filteredAndSortedData = useMemo(() => {
-    let filtered = menuData;
-
-    // Filter berdasarkan search
-    if (searchQuery) {
-      filtered = filtered.filter(item =>
-        item.foodName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-    }
-
-    // Filter berdasarkan kategori
-    if (selectedCategory !== 'Semua') {
-      filtered = filtered.filter(item => item.category === selectedCategory);
-    }
-
-    // Sort data
-    const sorted = [...filtered].sort((a, b) => {
-      switch (sortBy) {
-        case 'name-asc':
-          return a.foodName.localeCompare(b.foodName);
-        case 'name-desc':
-          return b.foodName.localeCompare(a.foodName);
-        default:
-          return 0;
-      }
+    return filterAndSortMenu(menuData, {
+      searchQuery,
+      category: selectedCategory,
+      sortBy,
     });
-
-    return sorted;
   }, [menuData, searchQuery, selectedCategory, sortBy]);
 
-  // Wrapper: tambah ke cart via context + animasi + alert
-  const handleAddToCart = async (itemId: string) => {
-    await addToCart(itemId);
+  // Optimized handlers with useCallback
+  const handleAddToCart = useCallback(async (itemId: string) => {
+    try {
+      await addToCart(itemId);
 
-    // Animasi bounce tombol cart
-    cartScale.value = withSpring(1.2, {}, () => {
-      cartScale.value = withSpring(1);
-    });
+      // Animasi bounce tombol cart
+      cartScale.value = withSpring(1.2, {}, () => {
+        cartScale.value = withSpring(1);
+      });
 
-    const menuItem = menuData.find(item => item.id === itemId);
-    if (menuItem) {
-      Alert.alert('Berhasil', `${menuItem.foodName} ditambahkan ke piring!`);
+      const menuItem = menuData.find(item => item.id === itemId);
+      if (menuItem) {
+        Alert.alert('Berhasil', `${menuItem.foodName} ditambahkan ke piring!`);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Gagal menambahkan ke piring');
+      console.error('[MenuPage] Add to cart error:', error);
     }
-  };
+  }, [addToCart, menuData, cartScale]);
 
-  // Navigasi ke halaman detail
-  const navigateToDetail = (id: string) => {
+  const navigateToDetail = useCallback((id: string) => {
     router.push(`/laukList/foodCard/${id}`);
-  };
+  }, []);
 
-  // Navigasi ke halaman piring
-  const navigateToPiring = () => {
+  const navigateToPiring = useCallback(() => {
     if (totalItems === 0) {
       Alert.alert('Peringatan', 'Piring masih kosong!');
       return;
     }
     router.push('/laukList/piring');
-  };
+  }, [totalItems]);
 
-  // Navigasi back
-  const handleBack = () => {
-    router.back();
-  };
+  const handleSelectCategory = useCallback((category: string) => {
+    setSelectedCategory(category);
+  }, []);
 
-  // Refresh data
-  const handleRefresh = () => {
-    fetchMenu(true);
-  };
+  const handleSelectSort = useCallback((value: SortOption) => {
+    setSortBy(value);
+    setShowSortOptions(false);
+  }, []);
+
+  const toggleSortOptions = useCallback(() => {
+    setShowSortOptions(prev => !prev);
+  }, []);
 
   // Animated style untuk tombol cart
   const cartButtonStyle = useAnimatedStyle(() => ({
@@ -156,61 +203,33 @@ const MenuPage = () => {
   }));
 
   // Sort options
-  const sortOptions: { value: SortOption; label: string }[] = [
+  const sortOptions: { value: SortOption; label: string }[] = useMemo(() => [
     { value: 'name-asc', label: 'Nama (A-Z)' },
     { value: 'name-desc', label: 'Nama (Z-A)' },
-  ];
+  ], []);
 
-  const renderMenuItem = ({ item, index }: { item: FoodItem; index: number }) => {
-    const cartItem = cart.find(c => c.id === item.id);
-    const cartQuantity = cartItem?.quantity ?? 0;
-
+  // Optimized renderItem with useCallback
+  const renderMenuItem = useCallback(({ item, index }: { item: FoodItem; index: number }) => {
     return (
-      <Animated.View entering={FadeInDown.delay(index * 100).springify()}>
-        <View className="mb-4">
-          <Card onPress={() => navigateToDetail(item.id)}>
-            <FoodCardItem
-              id={item.id}
-              name={item.foodName}
-              description={item.description}
-              imageUrl={item.imageUrl}
-            />
-          </Card>
-        </View>
-      </Animated.View>
+      <MenuItem 
+        item={item} 
+        index={index} 
+        onNavigate={navigateToDetail}
+      />
     );
-  };
+  }, [navigateToDetail]);
 
-  // TODO: refactor loading page ke komponen terpisah
+  // KeyExtractor memoized
+  const keyExtractor = useCallback((item: FoodItem) => item.id, []);
+
   // Loading state
   if (isLoading) {
-    return (
-      <View className="flex-1 bg-background-light justify-center items-center">
-        <ActivityIndicator size="large" color="#37B37E" />
-        <Text className="text-text-secondary-light mt-4 text-base">Memuat menu...</Text>
-      </View>
-    );
+    return <LoadingScreen message="Memuat menu..." />;
   }
 
-  // TODO: refactor error page ke komponen terpisah
   // Error state
   if (error && !menuData.length) {
-    return (
-      <View className="flex-1 bg-background-light justify-center items-center px-6">
-        <View className="bg-red-100 rounded-full p-6 mb-4">
-          <Ionicons name="alert-circle-outline" size={48} color="#ef4444" />
-        </View>
-        <Text className="text-text-primary-light text-lg font-semibold mt-2">Terjadi Kesalahan</Text>
-        <Text className="text-text-secondary-light text-center mt-2 text-base">{error}</Text>
-        <TouchableOpacity
-          onPress={() => fetchMenu()}
-          className="bg-primary-light px-6 py-3 rounded-lg mt-6 shadow-sm"
-          activeOpacity={0.7}
-        >
-          <Text className="text-text-inverse-light font-semibold text-base">Coba Lagi</Text>
-        </TouchableOpacity>
-      </View>
-    );
+    return <ErrorScreen error={error} onRetry={fetchMenu} />;
   }
 
   return (
@@ -218,52 +237,24 @@ const MenuPage = () => {
       {/* Header dengan Search Box */}
       <Animated.View entering={FadeInUp.duration(600)}>
         <CustomHeader
-            heading="Menu Lauk"
-            showBackButton={true}
-          />
+          heading="Menu Lauk"
+          showBackButton={true}
+        />
 
-          {/* Search Box */}
-          <SearchBox
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Cari menu favorit..."
-          />
+        {/* Search Box */}
+        <SearchBox
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Cari menu favorit..."
+        />
       </Animated.View>
 
       {/* Filter Kategori */}
-      <Animated.View entering={FadeInUp.delay(200).duration(600)}>
-        <View className="bg-surface-light border-b border-border-light">
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            className="py-3 px-4"
-            contentContainerStyle={{ paddingRight: 16 }}
-          >
-            {categories.map((category) => (
-              <TouchableOpacity
-                key={category}
-                onPress={() => setSelectedCategory(category)}
-                className={`mr-3 px-5 py-2.5 rounded-full ${
-                  selectedCategory === category
-                    ? 'bg-primary-light shadow-sm'
-                    : 'bg-overlay-light border border-border-light'
-                }`}
-                activeOpacity={0.7}
-              >
-                <Text
-                  className={`font-semibold text-sm ${
-                    selectedCategory === category
-                      ? 'text-text-inverse-light'
-                      : 'text-text-primary-light'
-                  }`}
-                >
-                  {category}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </Animated.View>
+      <CategoryFilter 
+        categories={categories}
+        selectedCategory={selectedCategory}
+        onSelectCategory={handleSelectCategory}
+      />
 
       {/* Sort & Result Count */}
       <Animated.View entering={FadeInUp.delay(300).duration(600)}>
@@ -273,7 +264,7 @@ const MenuPage = () => {
           </Text>
           
           <TouchableOpacity
-            onPress={() => setShowSortOptions(!showSortOptions)}
+            onPress={toggleSortOptions}
             className="flex-row items-center bg-overlay-light px-3 py-2 rounded-lg border border-border-light"
             activeOpacity={0.7}
           >
@@ -293,49 +284,28 @@ const MenuPage = () => {
 
       {/* Sort Options Dropdown */}
       {showSortOptions && (
-        <Animated.View entering={FadeInDown.duration(300)}>
-          <View className="bg-surface-light mx-4 mt-2 rounded-xl shadow-lg overflow-hidden border border-border-light">
-            {sortOptions.map((option, index) => (
-              <TouchableOpacity
-                key={option.value}
-                onPress={() => {
-                  setSortBy(option.value);
-                  setShowSortOptions(false);
-                }}
-                className={`px-4 py-3.5 ${
-                  index < sortOptions.length - 1 ? 'border-b border-border-light' : ''
-                } ${sortBy === option.value ? 'bg-overlay-light' : ''}`}
-                activeOpacity={0.7}
-              >
-                <View className="flex-row items-center justify-between">
-                  <Text
-                    className={`text-sm ${
-                      sortBy === option.value
-                        ? 'text-primary-light font-semibold'
-                        : 'text-text-primary-light font-medium'
-                    }`}
-                  >
-                    {option.label}
-                  </Text>
-                  {sortBy === option.value && (
-                    <Ionicons name="checkmark" size={20} color="#37B37E" />
-                  )}
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </Animated.View>
+        <SortDropdown 
+          sortOptions={sortOptions}
+          sortBy={sortBy}
+          onSelectSort={handleSelectSort}
+        />
       )}
 
       {/* Menu List */}
       <FlatList
         data={filteredAndSortedData}
         renderItem={renderMenuItem}
-        keyExtractor={item => item.id}
+        keyExtractor={keyExtractor}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         refreshing={isRefreshing}
-        onRefresh={handleRefresh}
+        onRefresh={refreshMenu}
         showsVerticalScrollIndicator={false}
+        // Performance optimizations
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={10}
+        updateCellsBatchingPeriod={50}
+        initialNumToRender={10}
+        windowSize={10}
         ListEmptyComponent={
           <View className="items-center justify-center py-20">
             <View className="bg-overlay-light rounded-full p-6 mb-4">
@@ -352,7 +322,10 @@ const MenuPage = () => {
         <View className="absolute bottom-6 right-6">
           <TouchableOpacity
             onPress={navigateToPiring}
-            className="bg-primary-light rounded-full px-6 py-4 shadow-xl flex-row items-center"
+            disabled={cartLoading}
+            className={`rounded-full px-6 py-4 shadow-xl flex-row items-center ${
+              cartLoading ? 'bg-gray-400' : 'bg-primary-light'
+            }`}
             activeOpacity={0.8}
             style={{
               elevation: 8,

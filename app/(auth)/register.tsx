@@ -4,6 +4,9 @@ import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/app/contexts/authContext';
 
+type Gender = "male" | "female";
+type UserRole = "ibu hamil" | "anak anak" | "remaja" | "dewasa" | "lansia";
+
 export default function RegisterScreen() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -12,10 +15,23 @@ export default function RegisterScreen() {
     const [age, setAge] = useState('');
     const [weight, setWeight] = useState('');
     const [height, setHeight] = useState('');
-    const [gender, setGender] = useState('');
-    const [role, setRole] = useState('');
+    const [gender, setGender] = useState<Gender | ''>('');
+    const [role, setRole] = useState<UserRole | ''>('');
     const [loading, setLoading] = useState(false);
     const { register } = useAuth();
+
+    const genderOptions: { label: string; value: Gender }[] = [
+        { label: 'Laki-laki', value: 'male' },
+        { label: 'Perempuan', value: 'female' },
+    ];
+
+    const roleOptions: { label: string; value: UserRole }[] = [
+        { label: 'Ibu Hamil', value: 'ibu hamil' },
+        { label: 'Anak-anak', value: 'anak anak' },
+        { label: 'Remaja', value: 'remaja' },
+        { label: 'Dewasa', value: 'dewasa' },
+        { label: 'Lansia', value: 'lansia' },
+    ];
 
     const handleRegister = async () => {
         if (!email || !password || !confirmPassword || !name || !age || !weight || !height || !gender || !role) {
@@ -47,8 +63,8 @@ export default function RegisterScreen() {
                 age,
                 weight,
                 height,
-                gender,
-                role,
+                gender: gender as Gender,
+                role: role as UserRole,
             });
             Alert.alert('Success', 'Registration successful!');
             router.replace('/(tabs)');
@@ -135,14 +151,28 @@ export default function RegisterScreen() {
 
                             <View className="flex-1">
                                 <Text className="text-sm font-medium text-text-primary mb-2">Gender</Text>
-                                <TextInput
-                                    className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
-                                    placeholder="M/F/Other"
-                                    value={gender}
-                                    onChangeText={setGender}
-                                    editable={!loading}
-                                    placeholderTextColor="#999"
-                                />
+                                <View className="flex-row space-x-2">
+                                    {genderOptions.map((option) => (
+                                        <TouchableOpacity
+                                            key={option.value}
+                                            className={`flex-1 border rounded-lg px-3 py-3 items-center ${
+                                                gender === option.value 
+                                                    ? 'bg-primary border-primary' 
+                                                    : 'bg-input border-border'
+                                            }`}
+                                            onPress={() => setGender(option.value)}
+                                            disabled={loading}
+                                        >
+                                            <Text className={`text-sm font-medium ${
+                                                gender === option.value 
+                                                    ? 'text-text-inverse' 
+                                                    : 'text-text-primary'
+                                            }`}>
+                                                {option.label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
                             </View>
                         </View>
 
@@ -175,15 +205,29 @@ export default function RegisterScreen() {
                         </View>
 
                         <View>
-                            <Text className="text-sm font-medium text-text-primary mb-2">Role</Text>
-                            <TextInput
-                                className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
-                                placeholder="e.g., User, Trainer, etc."
-                                value={role}
-                                onChangeText={setRole}
-                                editable={!loading}
-                                placeholderTextColor="#999"
-                            />
+                            <Text className="text-sm font-medium text-text-primary mb-2">Role (Kategori Pengguna)</Text>
+                            <View className="space-y-2">
+                                {roleOptions.map((option) => (
+                                    <TouchableOpacity
+                                        key={option.value}
+                                        className={`border rounded-lg px-4 py-3 ${
+                                            role === option.value 
+                                                ? 'bg-primary border-primary' 
+                                                : 'bg-input border-border'
+                                        }`}
+                                        onPress={() => setRole(option.value)}
+                                        disabled={loading}
+                                    >
+                                        <Text className={`text-base font-medium ${
+                                            role === option.value 
+                                                ? 'text-text-inverse' 
+                                                : 'text-text-primary'
+                                        }`}>
+                                            {option.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
                         </View>
 
                         <TouchableOpacity 
