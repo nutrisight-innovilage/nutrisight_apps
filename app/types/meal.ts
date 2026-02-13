@@ -17,6 +17,7 @@ import { CartItem } from './food';
  * untuk keperluan analisis nutrisi
  */
 export interface MealMetadata {
+  userId?: string;
   /** Porsi nasi dalam satuan piring (0, 0.25, 0.5, 1, 1.5, 2, 3) */
   ricePortion: number;
   /** Timestamp meal dibuat */
@@ -24,7 +25,7 @@ export interface MealMetadata {
   /** Timestamp terakhir diupdate */
   updatedAt: string;
   /** Optional: meal type (breakfast, lunch, dinner, snack) */
-  mealType?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+  mealType?: MealType;
   /** Optional: catatan user */
   notes?: string;
 }
@@ -66,6 +67,7 @@ export const RICE_PORTIONS: RicePortion[] = [
  * Ini adalah output dari nutrition analysis API
  */
 export interface NutritionScan {
+  userId?: string;
   id: string;
   foodName: string;
   date: string;
@@ -80,29 +82,11 @@ export interface NutritionScan {
  * Extended nutrition scan dengan meal metadata
  * Menghubungkan input (meal items) dengan output (nutrition result)
  */
-export interface DetailedNutritionScan extends NutritionScan {
-  /** Item-item makanan yang dianalisis */
-  mealItems?: CartItem[];
-  /** Porsi nasi dalam gram */
-  riceGrams?: number;
-  /** Metadata meal original */
-  metadata?: MealMetadata;
-  /** Breakdown nutrisi per item (optional) */
-  itemBreakdown?: NutritionBreakdownItem[];
-}
+
 
 /**
  * Breakdown nutrisi per item makanan
  */
-export interface NutritionBreakdownItem {
-  itemId: string;
-  itemName: string;
-  quantity: number;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fats: number;
-}
 
 // ---------------------------------------------------------------------------
 // Analysis & Goals Types
@@ -112,6 +96,7 @@ export interface NutritionBreakdownItem {
  * Target nutrisi harian user
  */
 export interface NutritionGoals {
+  calories: { min: number; max: number }; 
   protein: { min: number; max: number; label: string };
   carbs: { min: number; max: number; label: string };
   fats: { min: number; max: number; label: string };
@@ -127,7 +112,6 @@ export interface WeeklyInsight {
   totalCarbs: number;
   totalFats: number;
   mealsCount: number;
-  balancedMealsCount: number;
 }
 
 /**
@@ -162,16 +146,6 @@ export interface AnalyzeMealResponse {
   scan?: NutritionScan;
   analysisId?: string;
   message: string;
-  breakdown?: NutritionBreakdownItem[];
-}
-
-/**
- * Request untuk create scan manually
- */
-export interface CreateScanRequest extends Omit<NutritionScan, 'id'> {
-  mealItems?: CartItem[];
-  riceGrams?: number;
-  metadata?: MealMetadata;
 }
 
 /**
@@ -211,16 +185,6 @@ export interface MealSummary {
   createdAt: string;
 }
 
-/**
- * Nutrition comparison (actual vs goal)
- */
-export interface NutritionComparison {
-  nutrient: 'protein' | 'carbs' | 'fats';
-  actual: number;
-  goal: { min: number; max: number };
-  percentage: number;
-  status: 'below' | 'within' | 'above';
-}
 
 // ---------------------------------------------------------------------------
 // Utility Types
@@ -247,4 +211,4 @@ export interface DateRangeFilter {
 /**
  * Sorting options untuk scans
  */
-export type ScanSortOption = 'date-desc' | 'date-asc' | 'calories-desc' | 'calories-asc';
+export type ScanSortOption = 'date-desc' | 'date-asc' | 'calories-desc' | 'calories-asc' | "manual-asc" | "manual-desc";

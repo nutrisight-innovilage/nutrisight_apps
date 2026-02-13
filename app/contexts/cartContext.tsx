@@ -1,12 +1,18 @@
 /**
- * cartContext.tsx
+ * cartContext.tsx (REFACTORED - Clean Wrapper)
  * ---------------------------------------------------------------------------
  * Global cart state via React Context.
  * 
- * REFACTORED: Thin wrapper around MealOfflineAPI & SyncManager
- * • Prioritas: MealOfflineAPI (offline-first)
- * • Sync: Melalui SyncManager
- * • Backward compatible dengan semua function names yang sudah dipakai
+ * REFACTORED: Clean wrapper around mealService
+ * • ✅ Hanya mengelola React state
+ * • ✅ Semua business logic di mealService
+ * • ✅ Konsisten dengan pattern authService
+ * • ✅ Minimal, readable, maintainable
+ * 
+ * Pattern:
+ * - Context hanya untuk React state management
+ * - Service untuk business logic & data operations
+ * - Clean separation of concerns
  * ---------------------------------------------------------------------------
  */
 
@@ -20,14 +26,11 @@ import {
   MealSummary,
 } from '@/app/types/meal';
 
-// Import OFFLINE API (primary)
-import { MealOfflineAPI, LocalNutritionScan } from '@/app/services/meal/mealOfflineAPI';
-
-// Import SYNC (untuk submit analysis)
-import { getSyncManager } from '@/app/services/sync/syncManager';
+// Import MEAL SERVICE (single source of truth)
+import mealService from '@/app/services/meal/mealService';
 
 // ---------------------------------------------------------------------------
-// Context Type - TIDAK ADA PERUBAHAN (backward compatible)
+// Context Type - Interface TIDAK BERUBAH
 // ---------------------------------------------------------------------------
 interface CartContextType {
   // ========== Core Cart State ==========
@@ -48,20 +51,20 @@ interface CartContextType {
   isLoadingScans: boolean;
   lastSubmittedScan: NutritionScan | null;
 
-  // ========== Core Cart Actions (TIDAK BERUBAH) ==========
+  // ========== Core Cart Actions ==========
   addToCart: (id: string, qty?: number) => Promise<void>;
   updateQuantity: (id: string, qty: number) => Promise<void>;
   removeFromCart: (id: string) => Promise<void>;
   clearCart: () => Promise<void>;
 
-  // ========== Nutrition Analysis Actions (TIDAK BERUBAH) ==========
+  // ========== Nutrition Analysis Actions ==========
   setRicePortion: (portion: number) => Promise<void>;
   updateMetadata: (updates: Partial<Omit<MealMetadata, 'createdAt' | 'updatedAt'>>) => Promise<void>;
   refreshMealSummary: () => Promise<void>;
   getAnalysisPayload: () => Promise<NutritionAnalysisPayload>;
   submitAnalysis: () => Promise<AnalyzeMealResponse>;
 
-  // ========== Nutrition Scans Actions (TIDAK BERUBAH) ==========
+  // ========== Nutrition Scans Actions ==========
   refreshScans: () => Promise<void>;
   refreshTodayScans: () => Promise<void>;
   getScanById: (id: string) => Promise<NutritionScan | null>;
@@ -74,10 +77,10 @@ interface CartContextType {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
-// Provider - REFACTORED sebagai thin wrapper
+// Provider - REFACTORED sebagai clean wrapper
 // ---------------------------------------------------------------------------
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // ========== State ==========
+  // ========== React State (UI layer only) ==========
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,28 +94,22 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoadingScans, setIsLoadingScans] = useState(false);
   const [lastSubmittedScan, setLastSubmittedScan] = useState<NutritionScan | null>(null);
 
-  // ========== INITIALIZATION - Load from MealOfflineAPI ==========
+  // ========== INITIALIZATION - Load via mealService ==========
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
       try {
-        // Initialize offline API
-        await MealOfflineAPI.initializeOfflineAPI();
+        // Load cart data
+        const [cartData, portion, metadata, summary] = await Promise.all([
+          mealService.getCart(),
+          mealService.getRicePortion(),
+          mealService.getMealMetadata(),
+          mealService.getMealSummary(),
+        ]);
 
-        // Load cart items
-        const cartData = await MealOfflineAPI.getCart();
         setCart(cartData);
-
-        // Load rice portion
-        const portion = await MealOfflineAPI.getRicePortion();
         setRicePortionState(portion);
-
-        // Load meal metadata
-        const metadata = await MealOfflineAPI.getMealMetadata();
         setMealMetadata(metadata);
-
-        // Load meal summary
-        const summary = await MealOfflineAPI.getMealSummary();
         setMealSummary(summary);
 
         // Load scans in background (non-blocking)
@@ -126,19 +123,18 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     init();
   }, []);
 
-  // ========== HELPER: Load Scans from Local Storage ==========
+  // ========== HELPER: Load Scans ==========
   const loadScansInBackground = async () => {
     try {
       setIsLoadingScans(true);
 
-      // Load dari MealOfflineAPI (local storage)
       const [recent, today] = await Promise.all([
-        MealOfflineAPI.getAllLocalScans('date-desc', 10),
-        MealOfflineAPI.getTodayLocalScans(),
+        mealService.getAllScans('date-desc', 10),
+        mealService.getTodayScans(),
       ]);
 
-      setRecentScans(recent as NutritionScan[]);
-      setTodayScans(today as NutritionScan[]);
+      setRecentScans(recent);
+      setTodayScans(today);
     } catch (err) {
       console.error('[CartContext] Failed to load scans:', err);
     } finally {
@@ -146,71 +142,94 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // ========== HELPER: Run Cart Operation ==========
-  const runCartOp = useCallback(async (fn: () => Promise<CartItem[]>) => {
-    setIsLoading(true);
-    setError(null);
+  // ========== HELPER: Refresh UI State ==========
+  const refreshUIState = useCallback(async () => {
     try {
-      const updated = await fn();
-      setCart(updated);
-
-      // Reload metadata dan summary
       const [metadata, summary] = await Promise.all([
-        MealOfflineAPI.getMealMetadata(),
-        MealOfflineAPI.getMealSummary(),
+        mealService.getMealMetadata(),
+        mealService.getMealSummary(),
       ]);
       setMealMetadata(metadata);
       setMealSummary(summary);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Operasi cart gagal';
+      console.error('[CartContext] Failed to refresh UI state:', err);
+    }
+  }, []);
+
+  // ===========================================================================
+  // CART ACTIONS - Clean wrappers around mealService
+  // ===========================================================================
+
+  /**
+   * ✅ Add to cart
+   * Calls: mealService.addToCart()
+   */
+  const addToCart = useCallback(async (id: string, qty: number = 1) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updatedCart = await mealService.addToCart(id, qty);
+      setCart(updatedCart);
+      await refreshUIState();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal menambah item';
       setError(msg);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [refreshUIState]);
 
-  // ========== CART ACTIONS - Wrapper MealOfflineAPI ==========
-  
   /**
-   * ✅ UNCHANGED: addToCart
-   * Calls: MealOfflineAPI.addToCart
+   * ✅ Update quantity
+   * Calls: mealService.updateCartItem()
    */
-  const addToCart = useCallback(
-    (id: string, qty: number = 1) => runCartOp(() => MealOfflineAPI.addToCart(id, qty)),
-    [runCartOp]
-  );
+  const updateQuantity = useCallback(async (id: string, qty: number) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updatedCart = await mealService.updateCartItem(id, qty);
+      setCart(updatedCart);
+      await refreshUIState();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal update quantity';
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [refreshUIState]);
 
   /**
-   * ✅ UNCHANGED: updateQuantity
-   * Calls: MealOfflineAPI.updateCartItem
+   * ✅ Remove from cart
+   * Calls: mealService.removeFromCart()
    */
-  const updateQuantity = useCallback(
-    (id: string, qty: number) => runCartOp(() => MealOfflineAPI.updateCartItem(id, qty)),
-    [runCartOp]
-  );
+  const removeFromCart = useCallback(async (id: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updatedCart = await mealService.removeFromCart(id);
+      setCart(updatedCart);
+      await refreshUIState();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal hapus item';
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [refreshUIState]);
 
   /**
-   * ✅ UNCHANGED: removeFromCart
-   * Calls: MealOfflineAPI.removeFromCart
-   */
-  const removeFromCart = useCallback(
-    (id: string) => runCartOp(() => MealOfflineAPI.removeFromCart(id)),
-    [runCartOp]
-  );
-
-  /**
-   * ✅ UNCHANGED: clearCart
-   * Calls: MealOfflineAPI.clearCart
+   * ✅ Clear cart
+   * Calls: mealService.clearCart()
    */
   const clearCart = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      // Call offline API
-      await MealOfflineAPI.clearCart();
+      // Call service
+      await mealService.clearCart();
 
-      // Clear state
+      // Update UI state
       React.startTransition(() => {
         setCart([]);
         setRicePortionState(1);
@@ -221,13 +240,13 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const msg = err instanceof Error ? err.message : 'Gagal mengosongkan cart';
       setError(msg);
 
-      // Rollback
+      // Rollback - reload from service
       try {
         const [cartData, portion, metadata, summary] = await Promise.all([
-          MealOfflineAPI.getCart(),
-          MealOfflineAPI.getRicePortion(),
-          MealOfflineAPI.getMealMetadata(),
-          MealOfflineAPI.getMealSummary(),
+          mealService.getCart(),
+          mealService.getRicePortion(),
+          mealService.getMealMetadata(),
+          mealService.getMealSummary(),
         ]);
 
         React.startTransition(() => {
@@ -246,48 +265,43 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  // ========== NUTRITION ANALYSIS ACTIONS ==========
+  // ===========================================================================
+  // NUTRITION ANALYSIS ACTIONS - Clean wrappers
+  // ===========================================================================
 
   /**
-   * ✅ UNCHANGED: setRicePortion
-   * Calls: MealOfflineAPI.updateRicePortion
+   * ✅ Set rice portion
+   * Calls: mealService.updateRicePortion()
    */
   const setRicePortion = useCallback(async (portion: number) => {
     setIsLoading(true);
     setError(null);
     try {
-      await MealOfflineAPI.updateRicePortion(portion);
+      await mealService.updateRicePortion(portion);
       setRicePortionState(portion);
-
-      // Reload metadata dan summary
-      const [metadata, summary] = await Promise.all([
-        MealOfflineAPI.getMealMetadata(),
-        MealOfflineAPI.getMealSummary(),
-      ]);
-      setMealMetadata(metadata);
-      setMealSummary(summary);
+      await refreshUIState();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal update porsi nasi';
       setError(msg);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [refreshUIState]);
 
   /**
-   * ✅ UNCHANGED: updateMetadata
-   * Calls: MealOfflineAPI.updateMealMetadata
+   * ✅ Update metadata
+   * Calls: mealService.updateMealMetadata()
    */
   const updateMetadata = useCallback(
     async (updates: Partial<Omit<MealMetadata, 'createdAt' | 'updatedAt'>>) => {
       setIsLoading(true);
       setError(null);
       try {
-        const updated = await MealOfflineAPI.updateMealMetadata(updates);
+        const updated = await mealService.updateMealMetadata(updates);
         setMealMetadata(updated);
 
         // Refresh summary
-        const summary = await MealOfflineAPI.getMealSummary();
+        const summary = await mealService.getMealSummary();
         setMealSummary(summary);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Gagal update metadata';
@@ -300,12 +314,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 
   /**
-   * ✅ UNCHANGED: refreshMealSummary
-   * Calls: MealOfflineAPI.getMealSummary
+   * ✅ Refresh meal summary
+   * Calls: mealService.getMealSummary()
    */
   const refreshMealSummary = useCallback(async () => {
     try {
-      const summary = await MealOfflineAPI.getMealSummary();
+      const summary = await mealService.getMealSummary();
       setMealSummary(summary);
     } catch (err) {
       console.error('[CartContext] Failed to refresh meal summary:', err);
@@ -313,102 +327,46 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   /**
-   * ✅ UNCHANGED: getAnalysisPayload
-   * Calls: MealOfflineAPI.prepareNutritionAnalysisPayload
+   * ✅ Get analysis payload
+   * Calls: mealService.getAnalysisPayload()
    */
   const getAnalysisPayload = useCallback(async (): Promise<NutritionAnalysisPayload> => {
-    return await MealOfflineAPI.prepareNutritionAnalysisPayload();
+    return await mealService.getAnalysisPayload();
   }, []);
 
   /**
-   * ✅ UNCHANGED: submitAnalysis
-   * 🔄 CHANGED: Now uses SyncManager instead of direct API call
+   * ✅ Submit analysis
+   * Calls: mealService.submitAnalysis()
    * 
-   * Flow:
-   * 1. Validate meal data
-   * 2. Calculate nutrition offline (instant feedback)
-   * 3. Create local scan
-   * 4. Queue untuk sync via SyncManager
-   * 5. Clear cart
+   * Clean wrapper - all business logic in service
    */
   const submitAnalysis = useCallback(async (): Promise<AnalyzeMealResponse> => {
     setIsLoading(true);
     setError(null);
 
     try {
-      // 1. Prepare & validate data
-      const mealData = await MealOfflineAPI.prepareScanForSync();
+      // Service handles everything: validation, calculation, save, sync, clear
+      const response = await mealService.submitAnalysis();
 
-      if (!mealData) {
-        return {
-          success: false,
-          message: 'Data tidak valid untuk dianalisis',
-        };
+      if (response.success) {
+        // Update UI state
+        React.startTransition(() => {
+          setCart([]);
+          setRicePortionState(1);
+          setMealMetadata(null);
+          setMealSummary(null);
+          if (response.scan) {
+            setLastSubmittedScan(response.scan);
+          }
+        });
+
+        // Refresh scans in background
+        loadScansInBackground();
+      } else {
+        setError(response.message || 'Submit failed');
       }
 
-      // 2. Calculate nutrition OFFLINE (instant result)
-      const nutrition = await MealOfflineAPI.calculateMealNutrition(
-        mealData.items,
-        mealData.ricePortion
-      );
-
-      // 3. Create local scan (available immediately)
-      const localScan: NutritionScan = {
-        id: `local_${Date.now()}`,
-        foodName: mealData.metadata.mealType 
-          ? `${mealData.metadata.mealType.charAt(0).toUpperCase() + mealData.metadata.mealType.slice(1)}`
-          : 'My Meal',
-        date: new Date().toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          year: 'numeric' 
-        }),
-        time: new Date().toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        }),
-        calories: nutrition.calories,
-        protein: nutrition.protein,
-        carbs: nutrition.carbs,
-        fats: nutrition.fats,
-      };
-
-      // Save to local history
-      await MealOfflineAPI.saveCompletedScan(localScan);
-
-      // 4. Queue untuk sync dengan server (background)
-      try {
-        const syncManager = getSyncManager();
-        await syncManager.sync('meal', mealData);
-        console.log('[CartContext] Meal queued for server sync');
-      } catch (syncErr) {
-        console.warn('[CartContext] Failed to queue for sync, will retry later:', syncErr);
-        // Tidak throw error, karena local scan sudah tersimpan
-      }
-
-      // 5. Save as last submitted scan
-      setLastSubmittedScan(localScan);
-
-      // 6. Clear cart state
-      React.startTransition(() => {
-        setCart([]);
-        setRicePortionState(1);
-        setMealMetadata(null);
-        setMealSummary(null);
-      });
-
-      // 7. Clear cart storage
-      await MealOfflineAPI.clearCart();
-
-      // 8. Refresh scans in background
-      loadScansInBackground();
-
-      return {
-        success: true,
-        scan: localScan,
-        analysisId: localScan.id,
-        message: 'Analisis berhasil (offline)',
-      };
+      return response;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal submit analisis';
       setError(msg);
@@ -421,17 +379,19 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  // ========== NUTRITION SCANS ACTIONS ==========
+  // ===========================================================================
+  // NUTRITION SCANS ACTIONS - Clean wrappers
+  // ===========================================================================
 
   /**
-   * ✅ UNCHANGED: refreshScans
-   * 🔄 CHANGED: Now uses MealOfflineAPI.getAllLocalScans
+   * ✅ Refresh scans
+   * Calls: mealService.getAllScans()
    */
   const refreshScans = useCallback(async () => {
     setIsLoadingScans(true);
     try {
-      const scans = await MealOfflineAPI.getAllLocalScans('date-desc', 10);
-      setRecentScans(scans as NutritionScan[]);
+      const scans = await mealService.getAllScans('date-desc', 10);
+      setRecentScans(scans);
     } catch (err) {
       console.error('[CartContext] Failed to refresh scans:', err);
       setError(err instanceof Error ? err.message : 'Gagal refresh scans');
@@ -441,14 +401,14 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   /**
-   * ✅ UNCHANGED: refreshTodayScans
-   * 🔄 CHANGED: Now uses MealOfflineAPI.getTodayLocalScans
+   * ✅ Refresh today scans
+   * Calls: mealService.getTodayScans()
    */
   const refreshTodayScans = useCallback(async () => {
     setIsLoadingScans(true);
     try {
-      const scans = await MealOfflineAPI.getTodayLocalScans();
-      setTodayScans(scans as NutritionScan[]);
+      const scans = await mealService.getTodayScans();
+      setTodayScans(scans);
     } catch (err) {
       console.error('[CartContext] Failed to refresh today scans:', err);
       setError(err instanceof Error ? err.message : 'Gagal refresh today scans');
@@ -458,14 +418,13 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   /**
-   * ✅ UNCHANGED: getScanById
-   * 🔄 CHANGED: Now uses MealOfflineAPI.getLocalScanById
+   * ✅ Get scan by ID
+   * Calls: mealService.getScanById()
    */
   const getScanById = useCallback(async (id: string): Promise<NutritionScan | null> => {
     setIsLoadingScans(true);
     try {
-      const scan = await MealOfflineAPI.getLocalScanById(id);
-      return scan as NutritionScan | null;
+      return await mealService.getScanById(id);
     } catch (err) {
       console.error('[CartContext] Failed to get scan:', err);
       setError(err instanceof Error ? err.message : 'Gagal get scan');
@@ -476,13 +435,13 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   /**
-   * ✅ UNCHANGED: deleteScan
-   * 🔄 CHANGED: Now uses MealOfflineAPI.deleteLocalScan
+   * ✅ Delete scan
+   * Calls: mealService.deleteScan()
    */
   const deleteScan = useCallback(async (id: string) => {
     setIsLoadingScans(true);
     try {
-      await MealOfflineAPI.deleteLocalScan(id);
+      await mealService.deleteScan(id);
 
       // Update local state
       setRecentScans(prev => prev.filter(s => s.id !== id));
@@ -500,11 +459,17 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [lastSubmittedScan]);
 
-  // ========== DERIVED VALUES ==========
+  // ===========================================================================
+  // DERIVED VALUES
+  // ===========================================================================
+  
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
   const isEmpty = cart.length === 0;
 
-  // ========== RENDER - TIDAK ADA PERUBAHAN ==========
+  // ===========================================================================
+  // RENDER - Interface TIDAK BERUBAH
+  // ===========================================================================
+  
   return (
     <CartContext.Provider
       value={{
@@ -552,8 +517,17 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 };
 
 // ---------------------------------------------------------------------------
-// Hook - TIDAK ADA PERUBAHAN
+// Hook - Interface TIDAK BERUBAH
 // ---------------------------------------------------------------------------
+
+/**
+ * ✅ Use cart hook
+ * 
+ * Usage in components:
+ * ```tsx
+ * const { cart, addToCart, submitAnalysis } = useCart();
+ * ```
+ */
 export const useCart = (): CartContextType => {
   const ctx = useContext(CartContext);
   if (!ctx) {

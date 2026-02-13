@@ -1,68 +1,102 @@
 /**
- * menuOnlineAPI.ts
+ * menuOnlineAPI.ts (APPWRITE VERSION)
  * ---------------------------------------------------------------------------
- * Online API service untuk food menu items.
+ * Online API service untuk food menu items menggunakan Appwrite Databases.
+ * 
+ * Changes from original:
+ * • ✅ Replaced fetch() dengan Appwrite Databases queries
+ * • ✅ Efficient batch queries
+ * • ✅ Built-in pagination
+ * • ✅ Real-time updates capability (optional)
  * 
  * Features:
- * • Real API calls ke backend server
- * • Network timeout handling
- * • Error handling dengan proper HTTP status
- * • Batch operations untuk efficiency
+ * • Menu CRUD operations via Appwrite Databases
+ * • Search & filter menggunakan Appwrite queries
+ * • Incremental sync dengan timestamps
+ * • Category management
  * ---------------------------------------------------------------------------
  */
 
+import { 
+  databases, 
+  DATABASE_ID, 
+  COLLECTIONS,
+  QueryHelpers,
+  handleAppwriteError,
+} from '@/app/services/appwriteConfig';
 import { FoodItem, FoodItemDetail } from '@/app/types/food';
+import { Models } from 'appwrite';
 
 // ---------------------------------------------------------------------------
-// API Configuration
+// Type Conversions
 // ---------------------------------------------------------------------------
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
-const API_TIMEOUT = 10000; // 10 seconds
-
-// ---------------------------------------------------------------------------
-// Helper Functions
-// ---------------------------------------------------------------------------
 
 /**
- * Fetch with timeout
+ * Extended Appwrite Document type for Food Item (basic info)
  */
-const fetchWithTimeout = async (url: string, options: RequestInit = {}) => {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+export interface FoodItemDocument extends Models.Document {
+  foodName: string;
+  description: string;
+  imageUrl: string;
+  category: string;
+}
 
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
-    clearTimeout(timeoutId);
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
+/**
+ * Extended Appwrite Document type for Food Item Detail (complete info)
+ */
+export interface FoodItemDetailDocument extends Models.Document {
+  foodName: string;
+  description: string;
+  imageUrl: string;
+  category: string;
+  // Nutrition fields
+  protein: number;
+  fat: number;
+  carbs: number;
+  calories: number;
+  vitamins: string[];
+  // Recipe
+  recipe: string;
+}
+
+/**
+ * Convert Appwrite Document to FoodItem
+ */
+const convertToFoodItem = (doc: Models.Document): FoodItem => {
+  const data = doc as FoodItemDocument;
+  return {
+    id: data.$id,
+    foodName: data.foodName,
+    description: data.description,
+    imageUrl: data.imageUrl,
+    category: data.category,
+  };
 };
 
 /**
- * Handle API response
+ * Convert Appwrite Document to FoodItemDetail
  */
-const handleResponse = async (response: Response) => {
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.message || `HTTP error! status: ${response.status}`
-    );
-  }
-  return response.json();
+const convertToFoodItemDetail = (doc: Models.Document): FoodItemDetail => {
+  const data = doc as FoodItemDetailDocument;
+  return {
+    id: data.$id,
+    foodName: data.foodName,
+    description: data.description,
+    imageUrl: data.imageUrl,
+    category: data.category,
+    nutrition: {
+      protein: data.protein,
+      fat: data.fat,
+      carbs: data.carbs,
+      calories: data.calories,
+      vitamins: data.vitamins || [],
+    },
+    recipe: data.recipe,
+  };
 };
-
 // ---------------------------------------------------------------------------
-// Menu Online API
+// Menu Online API (Appwrite)
 // ---------------------------------------------------------------------------
 
 export const menuOnlineAPI = {
@@ -71,17 +105,47 @@ export const menuOnlineAPI = {
    */
   fetchMenuItems: async (): Promise<FoodItem[]> => {
     try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/menu`);
-      const data = await handleResponse(response);
-      return data;
-    } catch (error) {
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw new Error('Request timeout - silakan coba lagi');
+      console.log('[menuOnlineAPI] Fetching all menu items...');
+
+      // Fetch all documents from menu_items collection
+      // Use pagination for large datasets
+      let allItems: FoodItem[] = [];
+      let lastId: string | null = null;
+      const pageSize = 100;
+
+      while (true) {
+        const queries = [
+          QueryHelpers.limit(pageSize),
+          QueryHelpers.orderAsc('foodName'),
+        ];
+
+        if (lastId) {
+          // Pagination using cursor
+          queries.push(QueryHelpers.greaterThan('$id', lastId));
         }
-        throw new Error(`Gagal memuat menu: ${error.message}`);
+
+        const response = await databases.listDocuments(
+          DATABASE_ID,
+          COLLECTIONS.MENU_ITEMS,
+          queries
+        );
+
+        const items = response.documents.map(convertToFoodItem);
+        allItems = [...allItems, ...items];
+
+        // Check if we got all items
+        if (response.documents.length < pageSize) {
+          break;
+        }
+
+        lastId = response.documents[response.documents.length - 1].$id;
       }
-      throw new Error('Gagal memuat menu');
+
+      console.log(`[menuOnlineAPI] ✅ Fetched ${allItems.length} menu items`);
+      return allItems;
+    } catch (error) {
+      console.error('[menuOnlineAPI] Error fetching menu items:', error);
+      throw handleAppwriteError(error);
     }
   },
 
@@ -90,17 +154,20 @@ export const menuOnlineAPI = {
    */
   fetchFoodItemDetail: async (id: string): Promise<FoodItemDetail> => {
     try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/menu/${id}`);
-      const data = await handleResponse(response);
-      return data;
+      console.log('[menuOnlineAPI] Fetching food item detail:', id);
+
+      const doc = await databases.getDocument(
+        DATABASE_ID,
+        COLLECTIONS.MENU_ITEMS,
+        id
+      );
+
+      const detail = convertToFoodItemDetail(doc);
+      console.log('[menuOnlineAPI] ✅ Fetched food item detail');
+      return detail;
     } catch (error) {
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw new Error('Request timeout - silakan coba lagi');
-        }
-        throw new Error(`Gagal memuat detail menu: ${error.message}`);
-      }
-      throw new Error('Gagal memuat detail menu');
+      console.error('[menuOnlineAPI] Error fetching food item detail:', error);
+      throw handleAppwriteError(error);
     }
   },
 
@@ -109,19 +176,38 @@ export const menuOnlineAPI = {
    */
   fetchMultipleFoodDetails: async (ids: string[]): Promise<FoodItemDetail[]> => {
     try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/menu/batch?ids=${ids.join(',')}`
-      );
-      const data = await handleResponse(response);
-      return data;
-    } catch (error) {
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw new Error('Request timeout - silakan coba lagi');
-        }
-        throw new Error(`Gagal memuat detail menu: ${error.message}`);
+      console.log('[menuOnlineAPI] Fetching multiple food details:', ids.length);
+
+      if (ids.length === 0) {
+        return [];
       }
-      throw new Error('Gagal memuat detail menu');
+
+      // Appwrite doesn't have direct "IN" query for multiple IDs
+      // We need to fetch them one by one or use multiple queries
+      const details = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const doc = await databases.getDocument(
+              DATABASE_ID,
+              COLLECTIONS.MENU_ITEMS,
+              id
+            );
+            return convertToFoodItemDetail(doc);
+          } catch (error) {
+            console.error(`[menuOnlineAPI] Failed to fetch item ${id}:`, error);
+            return null;
+          }
+        })
+      );
+
+      // Filter out nulls
+      const validDetails = details.filter((d): d is FoodItemDetail => d !== null);
+
+      console.log(`[menuOnlineAPI] ✅ Fetched ${validDetails.length}/${ids.length} food details`);
+      return validDetails;
+    } catch (error) {
+      console.error('[menuOnlineAPI] Error fetching multiple food details:', error);
+      throw handleAppwriteError(error);
     }
   },
 
@@ -130,16 +216,24 @@ export const menuOnlineAPI = {
    */
   searchMenuItems: async (query: string): Promise<FoodItem[]> => {
     try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/menu/search?q=${encodeURIComponent(query)}`
+      console.log('[menuOnlineAPI] Searching menu items:', query);
+
+      // Use Appwrite's search query
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.MENU_ITEMS,
+        [
+          QueryHelpers.search('foodName', query),
+          QueryHelpers.limit(50),
+        ]
       );
-      const data = await handleResponse(response);
-      return data;
+
+      const items = response.documents.map(convertToFoodItem);
+      console.log(`[menuOnlineAPI] ✅ Found ${items.length} items`);
+      return items;
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Gagal mencari menu: ${error.message}`);
-      }
-      throw new Error('Gagal mencari menu');
+      console.error('[menuOnlineAPI] Error searching menu items:', error);
+      throw handleAppwriteError(error);
     }
   },
 
@@ -148,16 +242,24 @@ export const menuOnlineAPI = {
    */
   fetchMenuByCategory: async (category: string): Promise<FoodItem[]> => {
     try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/menu/category/${encodeURIComponent(category)}`
+      console.log('[menuOnlineAPI] Fetching menu by category:', category);
+
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.MENU_ITEMS,
+        [
+          QueryHelpers.equal('category', category),
+          QueryHelpers.orderAsc('foodName'),
+          QueryHelpers.limit(100),
+        ]
       );
-      const data = await handleResponse(response);
-      return data;
+
+      const items = response.documents.map(convertToFoodItem);
+      console.log(`[menuOnlineAPI] ✅ Found ${items.length} items in category`);
+      return items;
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Gagal memuat kategori: ${error.message}`);
-      }
-      throw new Error('Gagal memuat kategori');
+      console.error('[menuOnlineAPI] Error fetching menu by category:', error);
+      throw handleAppwriteError(error);
     }
   },
 
@@ -166,23 +268,34 @@ export const menuOnlineAPI = {
    */
   getNutritionalSummary: async (ids: string[]) => {
     try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/menu/nutrition/summary`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ ids }),
-        }
-      );
-      const data = await handleResponse(response);
-      return data;
+      console.log('[menuOnlineAPI] Calculating nutritional summary for', ids.length, 'items');
+
+      // Fetch all items
+      const items = await menuOnlineAPI.fetchMultipleFoodDetails(ids);
+
+      // Calculate totals
+      const summary = {
+        totalCalories: 0,
+        totalProtein: 0,
+        totalCarbs: 0,
+        totalFats: 0,
+        itemCount: items.length,
+      };
+
+      items.forEach(item => {
+        summary.totalCalories += item.nutrition.calories;
+        summary.totalProtein += item.nutrition.protein;
+        summary.totalCarbs += item.nutrition.carbs;
+        summary.totalFats += item.nutrition.fat;
+      });
+
+      console.log('[menuOnlineAPI] ✅ Nutritional summary calculated');
+      return summary;
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Gagal menghitung nutrisi: ${error.message}`);
-      }
-      throw new Error('Gagal menghitung nutrisi');
+      console.error('[menuOnlineAPI] Error calculating nutritional summary:', error);
+      throw handleAppwriteError(error);
     }
   },
-
   /**
    * Get recommended items based on nutritional needs
    */
@@ -192,25 +305,44 @@ export const menuOnlineAPI = {
     maxCarbs?: number;
   }): Promise<FoodItem[]> => {
     try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/menu/recommendations`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ nutritionGoals }),
-        }
-      );
-      const data = await handleResponse(response);
-      return data;
-    } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Gagal mendapatkan rekomendasi: ${error.message}`);
+      console.log('[menuOnlineAPI] Getting recommended items:', nutritionGoals);
+
+      // Build queries based on goals
+      const queries: string[] = [QueryHelpers.limit(20)];
+
+      if (nutritionGoals?.maxCalories) {
+        queries.push(QueryHelpers.lessThan('calories', nutritionGoals.maxCalories));
       }
-      throw new Error('Gagal mendapatkan rekomendasi');
+
+      if (nutritionGoals?.minProtein) {
+        queries.push(QueryHelpers.greaterThan('protein', nutritionGoals.minProtein));
+      }
+
+      if (nutritionGoals?.maxCarbs) {
+        queries.push(QueryHelpers.lessThan('carbs', nutritionGoals.maxCarbs));
+      }
+
+      // Order by popularity
+      queries.push(QueryHelpers.orderDesc('popularity'));
+
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.MENU_ITEMS,
+        queries
+      );
+
+      const items = response.documents.map(convertToFoodItem);
+      console.log(`[menuOnlineAPI] ✅ Found ${items.length} recommended items`);
+      return items;
+    } catch (error) {
+      console.error('[menuOnlineAPI] Error getting recommended items:', error);
+      throw handleAppwriteError(error);
     }
   },
 
   /**
    * Sync local menu cache with server
+   * Using incremental sync with timestamps
    */
   syncMenuCache: async (lastSyncTime?: string): Promise<{
     updated: FoodItem[];
@@ -218,18 +350,66 @@ export const menuOnlineAPI = {
     timestamp: string;
   }> => {
     try {
-      const url = lastSyncTime
-        ? `${API_BASE_URL}/menu/sync?since=${encodeURIComponent(lastSyncTime)}`
-        : `${API_BASE_URL}/menu/sync`;
+      console.log('[menuOnlineAPI] Syncing menu cache, lastSync:', lastSyncTime);
 
-      const response = await fetchWithTimeout(url);
-      const data = await handleResponse(response);
-      return data;
-    } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Gagal sync menu: ${error.message}`);
+      const queries: string[] = [QueryHelpers.limit(100)];
+
+      // If lastSyncTime provided, only get items updated after that time
+      if (lastSyncTime) {
+        queries.push(QueryHelpers.greaterThan('$updatedAt', lastSyncTime));
       }
-      throw new Error('Gagal sync menu');
+
+      queries.push(QueryHelpers.orderDesc('$updatedAt'));
+
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.MENU_ITEMS,
+        queries
+      );
+
+      const updated = response.documents.map(convertToFoodItem);
+
+      // Note: Appwrite doesn't have built-in "deleted items" tracking
+      // You would need to implement this with a separate "deleted_items" collection
+      // or use a soft-delete approach with an "isDeleted" flag
+
+      const result = {
+        updated,
+        deleted: [] as string[], // Would need custom implementation
+        timestamp: new Date().toISOString(),
+      };
+
+      console.log(`[menuOnlineAPI] ✅ Sync complete - ${updated.length} updates`);
+      return result;
+    } catch (error) {
+      console.error('[menuOnlineAPI] Error syncing menu cache:', error);
+      throw handleAppwriteError(error);
+    }
+  },
+
+  /**
+   * Get all categories
+   */
+  getCategories: async (): Promise<string[]> => {
+    try {
+      console.log('[menuOnlineAPI] Fetching categories...');
+
+      // Get distinct categories
+      // Note: Appwrite doesn't have direct "distinct" query
+      // We fetch all items and extract unique categories
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.MENU_ITEMS,
+        [QueryHelpers.limit(1000)]
+      );
+
+      const categories = [...new Set(response.documents.map(doc => doc.category))];
+      
+      console.log(`[menuOnlineAPI] ✅ Found ${categories.length} categories`);
+      return categories;
+    } catch (error) {
+      console.error('[menuOnlineAPI] Error fetching categories:', error);
+      throw handleAppwriteError(error);
     }
   },
 };

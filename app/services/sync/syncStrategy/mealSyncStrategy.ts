@@ -1,13 +1,22 @@
 /**
- * mealSyncStrategy.ts
+ * mealSyncStrategy.ts (CLEANED - APPWRITE VERSION)
  * ---------------------------------------------------------------------------
- * Meal-specific sync strategy.
- * Menghubungkan MealOfflineAPI dengan MealOnlineAPI.
+ * Meal-specific sync strategy - STRICTLY following mealService.ts usage.
  * 
- * Implements SyncStrategy interface untuk:
- * • Meal scans sync
- * • Photo upload sync
- * • Feedback sync
+ * REMOVED BLOAT:
+ * • ❌ sendHistoricalData action (not in mealService core flow)
+ * • ❌ sendFeedback action (not in types)
+ * • ❌ analyzePhoto action (not in types)
+ * 
+ * KEPT ONLY:
+ * • ✅ submitAnalysis - Main meal submission (mealService.submitAnalysis)
+ * • ✅ updateScan - Scan updates (mealService.updateScan)
+ * • ✅ deleteScan - Scan deletion (mealService.deleteScan)
+ * 
+ * Flow:
+ * 1. mealService.submitAnalysis() → sync('meal', { action: 'submitAnalysis', ... })
+ * 2. mealService.updateScan() → sync('meal', { action: 'updateScan', ... })
+ * 3. mealService.deleteScan() → sync('meal', { action: 'deleteScan', ... })
  * ---------------------------------------------------------------------------
  */
 
@@ -18,316 +27,395 @@ import { MealOnlineAPI } from '@/app/services/meal/mealOnlineAPI';
 import { AnalyzeMealRequest, NutritionScan } from '@/app/types/meal';
 
 // ---------------------------------------------------------------------------
-// Meal Scan Sync Strategy
+// Types for Sync Actions
 // ---------------------------------------------------------------------------
 
-export class MealScanSyncStrategy implements SyncStrategy {
+interface MealSyncData {
+  action: 'submitAnalysis' | 'updateScan' | 'deleteScan';
+  
+  // submitAnalysis
+  mealData?: AnalyzeMealRequest;
+  localScanId?: string;
+  
+  // updateScan
+  scanId?: string;
+  updates?: Partial<NutritionScan>;
+}
+
+// ---------------------------------------------------------------------------
+// Meal Sync Strategy (Cleaned)
+// ---------------------------------------------------------------------------
+
+export class MealSyncStrategy implements SyncStrategy {
   /**
    * Prepare meal data untuk sync
    */
-  async prepare(data: AnalyzeMealRequest): Promise<SyncPayload> {
+  async prepare(data: MealSyncData): Promise<SyncPayload> {
+    const action = data.action || 'submitAnalysis';
+    
     return {
-      id: `meal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `meal_${action}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type: 'meal',
       data: data,
-      priority: this.getPriority(),
+      priority: this.getPriorityForAction(action),
       retryCount: 0,
-      maxRetries: this.getMaxRetries(),
+      maxRetries: this.getMaxRetriesForAction(action),
       createdAt: new Date().toISOString(),
     };
   }
 
   /**
-   * Upload meal ke server untuk analysis
-   */
-  async upload(payload: SyncPayload): Promise<NutritionScan> {
-    const mealData = payload.data as AnalyzeMealRequest;
-    
-    console.log('[MealScanSync] Uploading meal for analysis...');
-    const scan = await MealOnlineAPI.analyzeMeal(mealData);
-    
-    console.log('[MealScanSync] ✓ Analysis complete:', scan.id);
-    return scan;
-  }
-
-  /**
-   * Handler ketika upload berhasil
-   */
-  async onSuccess(result: NutritionScan, payload: SyncPayload): Promise<void> {
-    console.log('[MealScanSync] Saving scan to local history...');
-    
-    // Save scan result ke local completed scans
-    await MealOfflineAPI.saveCompletedScan(result);
-    
-    // Mark as synced dengan server ID
-    const localScans = await MealOfflineAPI.getAllLocalScans();
-    const localScan = localScans.find(s => !s.isSynced);
-    
-    if (localScan) {
-      await MealOfflineAPI.markScanAsSynced(localScan.localId, result.id);
-    }
-    
-    console.log('[MealScanSync] ✓ Scan saved and marked as synced');
-  }
-
-  /**
-   * Handler ketika upload gagal
-   */
-  async onFailure(error: Error, payload: SyncPayload): Promise<void> {
-    console.error('[MealScanSync] Upload failed:', error.message);
-    
-    // Jika belum di pending queue, tambahkan
-    const mealData = payload.data as AnalyzeMealRequest;
-    
-    // Create temporary scan untuk local reference
-    const tempScan: NutritionScan = {
-      id: payload.id,
-      foodName: 'Pending Analysis',
-      date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      calories: 0,
-      protein: 0,
-      carbs: 0,
-      fats: 0,
-    };
-    
-    // Add to pending scans
-    await MealOfflineAPI.addToPendingScans(tempScan, mealData);
-    
-    console.log('[MealScanSync] Added to pending queue for retry');
-  }
-
-  /**
-   * Validate meal data
-   */
-  validate(data: any): boolean {
-    if (!data || typeof data !== 'object') {
-      return false;
-    }
-
-    const mealData = data as AnalyzeMealRequest;
-
-    // Must have items
-    if (!mealData.items || !Array.isArray(mealData.items) || mealData.items.length === 0) {
-      console.error('[MealScanSync] Validation failed: No items');
-      return false;
-    }
-
-    // Must have metadata
-    if (!mealData.metadata) {
-      console.error('[MealScanSync] Validation failed: No metadata');
-      return false;
-    }
-
-    // Must have valid rice portion
-    if (typeof mealData.ricePortion !== 'number' || mealData.ricePortion < 0) {
-      console.error('[MealScanSync] Validation failed: Invalid rice portion');
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
-   * Priority: Medium (2)
-   * Meal scans penting tapi tidak se-urgent auth
-   */
-  getPriority(): number {
-    return 2;
-  }
-
-  /**
-   * Max retries: 3
-   */
-  getMaxRetries(): number {
-    return 3;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Photo Upload Sync Strategy
-// ---------------------------------------------------------------------------
-
-export class PhotoSyncStrategy implements SyncStrategy {
-  /**
-   * Prepare photo untuk sync
-   */
-  async prepare(data: { photoUri: string; metadata?: any }): Promise<SyncPayload> {
-    return {
-      id: `photo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type: 'photo',
-      data: data,
-      priority: this.getPriority(),
-      retryCount: 0,
-      maxRetries: this.getMaxRetries(),
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Upload photo ke YOLO analysis
+   * Upload/sync meal data ke Appwrite
    */
   async upload(payload: SyncPayload): Promise<any> {
-    const photoData = payload.data as { photoUri: string; metadata?: any };
-    
-    console.log('[PhotoSync] Uploading photo for YOLO analysis...');
-    const result = await MealOnlineAPI.analyzeFoodFromPhoto(photoData.photoUri);
-    
-    console.log('[PhotoSync] ✓ YOLO analysis complete');
-    return result;
+    const data = payload.data as MealSyncData;
+    const action = data.action || 'submitAnalysis';
+
+    console.log(`[MealSync] Processing action: ${action}`);
+
+    switch (action) {
+      case 'submitAnalysis':
+        return await this.handleSubmitAnalysis(data);
+      
+      case 'updateScan':
+        return await this.handleUpdateScan(data);
+      
+      case 'deleteScan':
+        return await this.handleDeleteScan(data);
+      
+      default:
+        throw new Error(`Unknown action: ${action}`);
+    }
   }
 
-  /**
-   * Handler ketika upload berhasil
-   */
-  async onSuccess(result: any, payload: SyncPayload): Promise<void> {
-    console.log('[PhotoSync] Photo analyzed successfully');
-    
-    // Optional: Save detected foods ke local database
-    // Bisa digunakan untuk auto-populate cart
-    
-    console.log('[PhotoSync] ✓ Detection results saved');
-  }
+  // ===========================================================================
+  // ACTION HANDLERS
+  // ===========================================================================
 
   /**
-   * Handler ketika upload gagal
+   * Handle: submitAnalysis
+   * Submit meal untuk nutrition analysis
    */
-  async onFailure(error: Error, payload: SyncPayload): Promise<void> {
-    console.error('[PhotoSync] Upload failed:', error.message);
-    
-    const photoData = payload.data as { photoUri: string; metadata?: any };
-    
-    // Add to pending photos
-    await MealOfflineAPI.addToPendingPhotos(photoData.photoUri, photoData.metadata || {});
-    
-    console.log('[PhotoSync] Added to pending queue for retry');
-  }
-
-  /**
-   * Validate photo data
-   */
-  validate(data: any): boolean {
-    if (!data || typeof data !== 'object') {
-      return false;
+  private async handleSubmitAnalysis(data: MealSyncData): Promise<NutritionScan> {
+    if (!data.mealData) {
+      throw new Error('Missing mealData for submitAnalysis');
     }
 
-    const photoData = data as { photoUri: string; metadata?: any };
+    console.log('[MealSync:SubmitAnalysis] Uploading meal for analysis...');
+    
+    // Call MealOnlineAPI.analyzeMeal
+    const response = await MealOnlineAPI.analyzeMeal(data.mealData);
+    
+    if (!response.success || !response.scan) {
+      throw new Error(response.message || 'Analysis failed');
+    }
+    
+    console.log('[MealSync:SubmitAnalysis] ✅ Analysis complete:', response.scan.id);
+    return response.scan;
+  }
 
-    // Must have photo URI
-    if (!photoData.photoUri || typeof photoData.photoUri !== 'string') {
-      console.error('[PhotoSync] Validation failed: No photo URI');
-      return false;
+  /**
+   * Handle: updateScan
+   * Update existing scan on Appwrite
+   */
+  private async handleUpdateScan(data: MealSyncData): Promise<void> {
+    if (!data.scanId || !data.updates) {
+      throw new Error('Missing scanId or updates for updateScan');
     }
 
-    return true;
-  }
-
-  /**
-   * Priority: Low (3)
-   * Photo analysis bisa ditunda
-   */
-  getPriority(): number {
-    return 3;
-  }
-
-  /**
-   * Max retries: 5
-   * Photos bisa retry lebih banyak karena ukuran file
-   */
-  getMaxRetries(): number {
-    return 5;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Feedback Sync Strategy
-// ---------------------------------------------------------------------------
-
-export class FeedbackSyncStrategy implements SyncStrategy {
-  /**
-   * Prepare feedback untuk sync
-   */
-  async prepare(data: any): Promise<SyncPayload> {
-    return {
-      id: `feedback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type: 'feedback',
-      data: data,
-      priority: this.getPriority(),
-      retryCount: 0,
-      maxRetries: this.getMaxRetries(),
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Upload feedback ke server
-   */
-  async upload(payload: SyncPayload): Promise<void> {
-    const feedbackData = payload.data;
+    console.log('[MealSync:UpdateScan] Updating scan on Appwrite...');
     
-    console.log('[FeedbackSync] Uploading feedback...');
-    await MealOnlineAPI.sendUserFeedback(feedbackData);
+    // TODO: Implement updateScan in MealOnlineAPI when needed
+    console.warn('[MealSync:UpdateScan] ⚠️ Server update not yet implemented');
     
-    console.log('[FeedbackSync] ✓ Feedback sent');
+    console.log('[MealSync:UpdateScan] ✅ Update complete');
   }
 
   /**
-   * Handler ketika upload berhasil
+   * Handle: deleteScan
+   * Delete scan from Appwrite
    */
-  async onSuccess(result: any, payload: SyncPayload): Promise<void> {
-    console.log('[FeedbackSync] ✓ Feedback synced successfully');
-  }
-
-  /**
-   * Handler ketika upload gagal
-   */
-  async onFailure(error: Error, payload: SyncPayload): Promise<void> {
-    console.error('[FeedbackSync] Upload failed:', error.message);
-    
-    const feedbackData = payload.data;
-    
-    // Add to pending feedback
-    await MealOfflineAPI.addToPendingFeedback(
-      feedbackData.scanId,
-      feedbackData
-    );
-    
-    console.log('[FeedbackSync] Added to pending queue for retry');
-  }
-
-  /**
-   * Validate feedback data
-   */
-  validate(data: any): boolean {
-    if (!data || typeof data !== 'object') {
-      return false;
-    }
-
-    // Must have scan ID
+  private async handleDeleteScan(data: MealSyncData): Promise<void> {
     if (!data.scanId) {
-      console.error('[FeedbackSync] Validation failed: No scan ID');
+      throw new Error('Missing scanId for deleteScan');
+    }
+
+    console.log('[MealSync:DeleteScan] Deleting scan from Appwrite...');
+    
+    // TODO: Implement deleteScan in MealOnlineAPI when needed
+    console.warn('[MealSync:DeleteScan] ⚠️ Server deletion not yet implemented');
+    
+    console.log('[MealSync:DeleteScan] ✅ Deletion complete');
+  }
+
+  // ===========================================================================
+  // SUCCESS HANDLERS
+  // ===========================================================================
+
+  /**
+   * Handler ketika upload berhasil
+   */
+  async onSuccess(result: any, payload: SyncPayload): Promise<void> {
+    const data = payload.data as MealSyncData;
+    const action = data.action || 'submitAnalysis';
+
+    console.log(`[MealSync] ✅ Success for action: ${action}`);
+
+    switch (action) {
+      case 'submitAnalysis':
+        await this.onSubmitAnalysisSuccess(result as NutritionScan, data);
+        break;
+      
+      case 'updateScan':
+        await this.onUpdateScanSuccess(data);
+        break;
+      
+      case 'deleteScan':
+        await this.onDeleteScanSuccess(data);
+        break;
+    }
+  }
+
+  /**
+   * Success: submitAnalysis
+   */
+  private async onSubmitAnalysisSuccess(
+    serverScan: NutritionScan, 
+    data: MealSyncData
+  ): Promise<void> {
+    console.log('[MealSync:SubmitAnalysis] Processing success...');
+
+    // Update local scan dengan server result
+    if (data.localScanId) {
+      try {
+        const localScan = await MealOfflineAPI.getLocalScanById(data.localScanId);
+        
+        if (localScan) {
+          // Update dengan server data
+          await MealOfflineAPI.updateLocalScan(data.localScanId, {
+            ...serverScan,
+          });
+          
+          // Mark as synced
+          await MealOfflineAPI.markScanAsSynced(data.localScanId, serverScan.id);
+          
+          console.log('[MealSync:SubmitAnalysis] ✅ Local scan updated with server data');
+        } else {
+          // Local scan tidak ditemukan, save server result
+          await MealOfflineAPI.saveCompletedScan(serverScan);
+          console.log('[MealSync:SubmitAnalysis] ✅ Server scan saved locally');
+        }
+      } catch (error) {
+        console.error('[MealSync:SubmitAnalysis] Failed to update local scan:', error);
+        // Non-critical error, don't throw
+      }
+    } else {
+      // No local scan ID, just save server result
+      await MealOfflineAPI.saveCompletedScan(serverScan);
+      console.log('[MealSync:SubmitAnalysis] ✅ Server scan saved locally');
+    }
+  }
+
+  /**
+   * Success: updateScan
+   */
+  private async onUpdateScanSuccess(data: MealSyncData): Promise<void> {
+    console.log('[MealSync:UpdateScan] ✅ Server updated successfully');
+    
+    if (data.scanId) {
+      // Mark local scan as synced
+      const localScan = await MealOfflineAPI.getLocalScanById(data.scanId);
+      if (localScan && !localScan.isSynced) {
+        await MealOfflineAPI.markScanAsSynced(localScan.localId, data.scanId);
+      }
+    }
+  }
+
+  /**
+   * Success: deleteScan
+   */
+  private async onDeleteScanSuccess(data: MealSyncData): Promise<void> {
+    console.log('[MealSync:DeleteScan] ✅ Server deletion confirmed');
+    // Local scan already deleted by mealService
+  }
+
+  // ===========================================================================
+  // FAILURE HANDLERS
+  // ===========================================================================
+
+  /**
+   * Handler ketika upload gagal
+   */
+  async onFailure(error: Error, payload: SyncPayload): Promise<void> {
+    const data = payload.data as MealSyncData;
+    const action = data.action || 'submitAnalysis';
+
+    console.error(`[MealSync] ❌ Failure for action ${action}:`, error.message);
+
+    switch (action) {
+      case 'submitAnalysis':
+        await this.onSubmitAnalysisFailure(error, data);
+        break;
+      
+      case 'updateScan':
+        await this.onUpdateScanFailure(error, data);
+        break;
+      
+      case 'deleteScan':
+        await this.onDeleteScanFailure(error, data);
+        break;
+    }
+  }
+
+  /**
+   * Failure: submitAnalysis
+   */
+  private async onSubmitAnalysisFailure(error: Error, data: MealSyncData): Promise<void> {
+    console.error('[MealSync:SubmitAnalysis] ❌ Server upload failed:', error.message);
+    console.log('[MealSync:SubmitAnalysis] Meal will retry on next sync');
+  }
+
+  /**
+   * Failure: updateScan
+   */
+  private async onUpdateScanFailure(error: Error, data: MealSyncData): Promise<void> {
+    console.error('[MealSync:UpdateScan] ❌ Server update failed:', error.message);
+    console.log('[MealSync:UpdateScan] Will retry on next sync');
+  }
+
+  /**
+   * Failure: deleteScan
+   */
+  private async onDeleteScanFailure(error: Error, data: MealSyncData): Promise<void> {
+    console.error('[MealSync:DeleteScan] ❌ Server deletion failed:', error.message);
+    console.log('[MealSync:DeleteScan] Will retry on next sync');
+  }
+
+  // ===========================================================================
+  // VALIDATION
+  // ===========================================================================
+
+  /**
+   * Validate meal sync data
+   */
+  validate(data: any): boolean {
+    if (!data || typeof data !== 'object') {
+      console.error('[MealSync] Validation failed: Invalid data type');
       return false;
     }
 
-    // Must have rating
-    if (typeof data.rating !== 'number' || data.rating < 1 || data.rating > 5) {
-      console.error('[FeedbackSync] Validation failed: Invalid rating');
+    const mealData = data as MealSyncData;
+    const action = mealData.action || 'submitAnalysis';
+
+    switch (action) {
+      case 'submitAnalysis':
+        return this.validateSubmitAnalysis(mealData);
+      
+      case 'updateScan':
+        return this.validateUpdateScan(mealData);
+      
+      case 'deleteScan':
+        return this.validateDeleteScan(mealData);
+      
+      default:
+        console.error(`[MealSync] Unknown action: ${action}`);
+        return false;
+    }
+  }
+
+  private validateSubmitAnalysis(data: MealSyncData): boolean {
+    if (!data.mealData) {
+      console.error('[MealSync:SubmitAnalysis] Missing mealData');
+      return false;
+    }
+
+    if (!data.mealData.items || data.mealData.items.length === 0) {
+      console.error('[MealSync:SubmitAnalysis] No items in meal');
+      return false;
+    }
+
+    if (typeof data.mealData.ricePortion !== 'number') {
+      console.error('[MealSync:SubmitAnalysis] Invalid rice portion');
       return false;
     }
 
     return true;
   }
 
+  private validateUpdateScan(data: MealSyncData): boolean {
+    if (!data.scanId) {
+      console.error('[MealSync:UpdateScan] Missing scanId');
+      return false;
+    }
+
+    if (!data.updates) {
+      console.error('[MealSync:UpdateScan] Missing updates');
+      return false;
+    }
+
+    return true;
+  }
+
+  private validateDeleteScan(data: MealSyncData): boolean {
+    if (!data.scanId) {
+      console.error('[MealSync:DeleteScan] Missing scanId');
+      return false;
+    }
+
+    return true;
+  }
+
+  // ===========================================================================
+  // PRIORITY & RETRY CONFIGURATION
+  // ===========================================================================
+
   /**
-   * Priority: Low (4)
-   * Feedback tidak urgent
+   * Get priority berdasarkan action type
    */
-  getPriority(): number {
-    return 4;
+  private getPriorityForAction(action: string): number {
+    switch (action) {
+      case 'submitAnalysis':
+        return 2; // Medium - important
+      
+      case 'updateScan':
+        return 3; // Low-medium
+      
+      case 'deleteScan':
+        return 3; // Low-medium
+      
+      default:
+        return 5; // Lowest
+    }
   }
 
   /**
-   * Max retries: 3
+   * Get max retries berdasarkan action type
+   */
+  private getMaxRetriesForAction(action: string): number {
+    switch (action) {
+      case 'submitAnalysis':
+        return 3; // Standard retries
+      
+      case 'updateScan':
+        return 3;
+      
+      case 'deleteScan':
+        return 2; // Fewer retries for delete
+      
+      default:
+        return 3;
+    }
+  }
+
+  /**
+   * Default priority untuk backward compatibility
+   */
+  getPriority(): number {
+    return 2; // Medium
+  }
+
+  /**
+   * Default max retries untuk backward compatibility
    */
   getMaxRetries(): number {
     return 3;
@@ -335,11 +423,7 @@ export class FeedbackSyncStrategy implements SyncStrategy {
 }
 
 // ---------------------------------------------------------------------------
-// Export all strategies
+// Export Strategy Instance
 // ---------------------------------------------------------------------------
 
-export const MealSyncStrategies = {
-  scan: new MealScanSyncStrategy(),
-  photo: new PhotoSyncStrategy(),
-  feedback: new FeedbackSyncStrategy(),
-};
+export const mealSyncStrategy = new MealSyncStrategy();

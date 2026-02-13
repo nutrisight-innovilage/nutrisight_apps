@@ -363,6 +363,8 @@ export class MealOfflineAPI {
     const items = await this.getCart();
     const metadata = await this.getMealMetadata();
     const riceGrams = getRiceGrams(metadata.ricePortion);
+    const estimatedCalories = await this.estimateCalories(items, metadata.ricePortion);
+  
 
     const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -371,6 +373,7 @@ export class MealOfflineAPI {
       totalQuantity,
       ricePortion: metadata.ricePortion,
       riceGrams,
+      estimatedCalories,
       mealType: metadata.mealType,
       createdAt: metadata.createdAt,
     };
@@ -624,7 +627,7 @@ export class MealOfflineAPI {
     const endDate = new Date(filter.endDate);
 
     return scans.filter(scan => {
-      const scanDate = new Date(scan.lastModified);
+      const scanDate = new Date(scan.date);
       return scanDate >= startDate && scanDate <= endDate;
     });
   }

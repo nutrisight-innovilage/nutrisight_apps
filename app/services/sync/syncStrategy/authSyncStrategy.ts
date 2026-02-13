@@ -1,14 +1,19 @@
 /**
- * authSyncStrategy.ts
+ * authSyncStrategy.ts (APPWRITE VERSION)
  * ---------------------------------------------------------------------------
- * Sync strategy untuk authentication dan user data.
- * Implements SyncStrategy interface dari syncManager.
+ * Sync strategy untuk authentication dan user data dengan Appwrite.
+ * 
+ * Changes from original:
+ * • ✅ Adjusted untuk Appwrite session-based auth
+ * • ✅ Sync user documents to Appwrite Databases
+ * • ✅ Handle profile updates via Appwrite Account + Databases
+ * • ✅ Conflict resolution dengan server priority
  * 
  * Features:
  * • User profile synchronization
  * • Offline registration sync
  * • Profile update sync
- * • Conflict resolution dengan server priority
+ * • Appwrite-compatible data handling
  * ---------------------------------------------------------------------------
  */
 
@@ -17,21 +22,70 @@ import { SyncStrategy } from '@/app/services/sync/syncManager';
 import authOnlineAPI from '@/app/services/auth/authOnlineAPI';
 import authOfflineAPI from '@/app/services/auth/authOfflineAPI';
 import { User, RegisterRequest, UpdateUserRequest } from '@/app/types/user';
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface AuthSyncData {
-  action: 'register' | 'update' | 'profile_sync';
+  action: 
+    | 'register' 
+    | 'updateProfile'
+    | 'changePassword'
+    | 'logout'
+    | 'deleteAccount';
+  
+  // For different actions
   userId?: string;
   token?: string;
+  
+  // register
   registerData?: RegisterRequest;
-  updateData?: UpdateUserRequest;
+  
+  // updateProfile
+  userData?: UpdateUserRequest;
+  
+  // changePassword
+  oldPassword?: string;
+  newPassword?: string;
 }
 
+// Add result types
+interface RegisterSyncResult {
+  action: 'register';
+  user: User;
+  token: string;
+  note?: string;
+}
+
+interface UpdateProfileSyncResult {
+  action: 'updateProfile';
+  user: User;
+  token: string;
+}
+
+interface PasswordChangeSyncResult {
+  action: 'changePassword';
+  userId: string;
+}
+
+interface LogoutSyncResult {
+  action: 'logout';
+}
+
+interface DeleteAccountSyncResult {
+  action: 'deleteAccount';
+  userId: string;
+}
+
+type AuthSyncResult = 
+  | RegisterSyncResult 
+  | UpdateProfileSyncResult 
+  | PasswordChangeSyncResult 
+  | LogoutSyncResult 
+  | DeleteAccountSyncResult;
+
 // ---------------------------------------------------------------------------
-// Auth Sync Strategy
+// Auth Sync Strategy (Appwrite)
 // ---------------------------------------------------------------------------
 
 export class AuthSyncStrategy implements SyncStrategy {
@@ -54,9 +108,9 @@ export class AuthSyncStrategy implements SyncStrategy {
   }
 
   /**
-   * Upload/Sync auth data with server
+   * Upload/Sync auth data with Appwrite
    */
-  async upload(payload: SyncPayload): Promise<any> {
+  async upload(payload: SyncPayload): Promise<AuthSyncResult> {
     const data = payload.data as AuthSyncData;
 
     try {
@@ -66,11 +120,17 @@ export class AuthSyncStrategy implements SyncStrategy {
         case 'register':
           return await this.syncRegistration(data);
 
-        case 'update':
+        case 'updateProfile':
           return await this.syncProfileUpdate(data);
 
-        case 'profile_sync':
-          return await this.syncProfile(data);
+        case 'changePassword':
+          return await this.syncPasswordChange(data);
+
+        case 'logout':
+          return await this.syncLogout(data);
+
+        case 'deleteAccount':
+          return await this.syncAccountDeletion(data);
 
         default:
           throw new Error(`Unknown auth sync action: ${data.action}`);
@@ -82,59 +142,126 @@ export class AuthSyncStrategy implements SyncStrategy {
   }
 
   /**
-   * Sync offline registration to server
+   * Sync offline registration to Appwrite
    */
-  private async syncRegistration(data: AuthSyncData): Promise<any> {
+  private async syncRegistration(data: AuthSyncData): Promise<RegisterSyncResult> {
     if (!data.registerData) {
       throw new Error('Register data is required');
     }
 
     console.log('[AuthSyncStrategy] Syncing registration...');
-    const result = await authOnlineAPI.register(data.registerData);
     
-    return {
-      action: 'register',
-      user: result.user,
-      token: result.token,
-    };
+    // Note: In Appwrite, registration creates both Account and Session
+    // We need to check if user already exists first
+    try {
+      const result = await authOnlineAPI.register(data.registerData);
+      
+      return {
+        action: 'register',
+        user: result.user,
+        token: result.token,
+      };
+    } catch (error: any) {
+      // If email already exists, this is expected for offline-first
+      if (error.message?.includes('already exists') || error.message?.includes('email')) {
+        console.warn('[AuthSyncStrategy] User already registered on server');
+        
+        // Try to login instead
+        const loginResult = await authOnlineAPI.login({
+          email: data.registerData.email,
+          password: data.registerData.password,
+        });
+        
+        return {
+          action: 'register',
+          user: loginResult.user,
+          token: loginResult.token,
+          note: 'User already existed, logged in instead',
+        };
+      }
+      
+      throw error;
+    }
   }
 
   /**
-   * Sync profile update to server
+   * Sync profile update to Appwrite
    */
-  private async syncProfileUpdate(data: AuthSyncData): Promise<any> {
-    if (!data.userId || !data.updateData || !data.token) {
-      throw new Error('userId, updateData, and token are required');
+  private async syncProfileUpdate(data: AuthSyncData): Promise<UpdateProfileSyncResult> {
+    if (!data.userId || !data.userData || !data.token) {
+      throw new Error('userId, userData, and token are required');
     }
 
     console.log('[AuthSyncStrategy] Syncing profile update...');
+    
     const result = await authOnlineAPI.updateUser(
       data.userId,
-      data.updateData,
+      data.userData,
       data.token
     );
 
     return {
-      action: 'update',
+      action: 'updateProfile',
       user: result.user,
       token: result.token,
     };
   }
 
   /**
-   * Sync profile from server
+   * Sync password change to Appwrite
    */
-  private async syncProfile(data: AuthSyncData): Promise<any> {
-    if (!data.token) {
-      throw new Error('Token is required for profile sync');
+  private async syncPasswordChange(data: AuthSyncData): Promise<PasswordChangeSyncResult> {
+    if (!data.userId || !data.oldPassword || !data.newPassword || !data.token) {
+      throw new Error('All password change fields are required');
     }
 
-    console.log('[AuthSyncStrategy] Syncing profile from server...');
-    const user = await authOnlineAPI.getCurrentUser(data.token);
+    console.log('[AuthSyncStrategy] Syncing password change...');
+    
+    await authOnlineAPI.changePassword(
+      data.userId,
+      data.oldPassword,
+      data.newPassword,
+      data.token
+    );
 
     return {
-      action: 'profile_sync',
-      user,
+      action: 'changePassword',
+      userId: data.userId,
+    };
+  }
+
+  /**
+   * Sync logout to Appwrite
+   */
+  private async syncLogout(data: AuthSyncData): Promise<LogoutSyncResult> {
+    if (!data.token) {
+      throw new Error('Token is required for logout');
+    }
+
+    console.log('[AuthSyncStrategy] Syncing logout...');
+    
+    await authOnlineAPI.logout(data.token);
+
+    return {
+      action: 'logout',
+    };
+  }
+
+  /**
+   * Sync account deletion to Appwrite
+   */
+  private async syncAccountDeletion(data: AuthSyncData): Promise<DeleteAccountSyncResult> {
+    if (!data.userId || !data.token) {
+      throw new Error('userId and token are required');
+    }
+
+    console.log('[AuthSyncStrategy] Syncing account deletion...');
+    
+    await authOnlineAPI.deleteAccount(data.userId, data.token);
+
+    return {
+      action: 'deleteAccount',
+      userId: data.userId,
     };
   }
 
@@ -151,12 +278,20 @@ export class AuthSyncStrategy implements SyncStrategy {
           await this.handleRegistrationSuccess(result);
           break;
 
-        case 'update':
+        case 'updateProfile':
           await this.handleUpdateSuccess(result, data);
           break;
 
-        case 'profile_sync':
-          await this.handleProfileSyncSuccess(result);
+        case 'changePassword':
+          await this.handlePasswordChangeSuccess(data);
+          break;
+
+        case 'logout':
+          await this.handleLogoutSuccess();
+          break;
+
+        case 'deleteAccount':
+          await this.handleDeleteAccountSuccess();
           break;
       }
 
@@ -173,8 +308,8 @@ export class AuthSyncStrategy implements SyncStrategy {
   private async handleRegistrationSuccess(result: any): Promise<void> {
     const { user, token } = result;
 
-    // Update local storage with server response
-    // Server may have assigned a real ID, timestamps, etc.
+    // Update local storage with Appwrite response
+    // Appwrite may have different user ID format, timestamps, etc.
     await authOfflineAPI.saveUserFromServer(user);
 
     console.log('[AuthSyncStrategy] Registration synced successfully');
@@ -186,7 +321,7 @@ export class AuthSyncStrategy implements SyncStrategy {
   private async handleUpdateSuccess(result: any, data: AuthSyncData): Promise<void> {
     const { user } = result;
 
-    // Update local storage with server response
+    // Update local storage with Appwrite response
     await authOfflineAPI.saveUserFromServer(user);
 
     // Clear pending update
@@ -198,15 +333,33 @@ export class AuthSyncStrategy implements SyncStrategy {
   }
 
   /**
-   * Handle successful profile sync from server
+   * Handle successful password change sync
    */
-  private async handleProfileSyncSuccess(result: any): Promise<void> {
-    const { user } = result;
+  private async handlePasswordChangeSuccess(data: AuthSyncData): Promise<void> {
+    console.log('[AuthSyncStrategy] Password change synced successfully');
+    
+    // Password is already updated locally by authOfflineAPI
+    // No additional action needed
+  }
 
-    // Save server profile to local storage
-    await authOfflineAPI.saveUserFromServer(user);
+  /**
+   * Handle successful logout sync
+   */
+  private async handleLogoutSuccess(): Promise<void> {
+    console.log('[AuthSyncStrategy] Logout synced successfully');
+    
+    // Local data already cleared by authService
+    // No additional action needed
+  }
 
-    console.log('[AuthSyncStrategy] Profile synced from server successfully');
+  /**
+   * Handle successful account deletion sync
+   */
+  private async handleDeleteAccountSuccess(): Promise<void> {
+    console.log('[AuthSyncStrategy] Account deletion synced successfully');
+    
+    // Local data already cleared by authService
+    // No additional action needed
   }
 
   /**
@@ -232,9 +385,14 @@ export class AuthSyncStrategy implements SyncStrategy {
     console.log('[AuthSyncStrategy] Failure logged:', failureLog);
 
     // Special handling for different errors
-    if (error.message.includes('Email already registered')) {
-      console.warn('[AuthSyncStrategy] Registration conflict - email exists on server');
+    if (error.message.includes('already exists') || error.message.includes('email')) {
+      console.warn('[AuthSyncStrategy] Registration conflict - email exists on Appwrite');
       // Could trigger conflict resolution here
+    }
+
+    if (error.message.includes('Unauthorized') || error.message.includes('401')) {
+      console.warn('[AuthSyncStrategy] Session expired - need to re-login');
+      // Could trigger re-authentication here
     }
 
     // Don't throw - let sync manager handle retry logic
@@ -252,7 +410,8 @@ export class AuthSyncStrategy implements SyncStrategy {
     const authData = data as AuthSyncData;
 
     // Validate action
-    if (!authData.action || !['register', 'update', 'profile_sync'].includes(authData.action)) {
+    const validActions = ['register', 'updateProfile', 'changePassword', 'logout', 'deleteAccount'];
+    if (!authData.action || !validActions.includes(authData.action)) {
       console.error('[AuthSyncStrategy] Invalid action');
       return false;
     }
@@ -266,16 +425,30 @@ export class AuthSyncStrategy implements SyncStrategy {
         }
         break;
 
-      case 'update':
-        if (!authData.userId || !authData.updateData || !authData.token) {
-          console.error('[AuthSyncStrategy] userId, updateData, and token required for update');
+      case 'updateProfile':
+        if (!authData.userId || !authData.userData || !authData.token) {
+          console.error('[AuthSyncStrategy] userId, userData, and token required for update');
           return false;
         }
         break;
 
-      case 'profile_sync':
+      case 'changePassword':
+        if (!authData.userId || !authData.oldPassword || !authData.newPassword || !authData.token) {
+          console.error('[AuthSyncStrategy] All password fields required');
+          return false;
+        }
+        break;
+
+      case 'logout':
         if (!authData.token) {
-          console.error('[AuthSyncStrategy] Token required for profile sync');
+          console.error('[AuthSyncStrategy] Token required for logout');
+          return false;
+        }
+        break;
+
+      case 'deleteAccount':
+        if (!authData.userId || !authData.token) {
+          console.error('[AuthSyncStrategy] userId and token required for deletion');
           return false;
         }
         break;
@@ -326,9 +499,9 @@ export const syncPendingProfileUpdates = async (
     for (const [userId, updateData] of Object.entries(pendingUpdates)) {
       try {
         const syncData: AuthSyncData = {
-          action: 'update',
+          action: 'updateProfile',
           userId,
-          updateData,
+          userData: updateData,
           token,
         };
 
@@ -361,25 +534,17 @@ export const syncPendingProfileUpdates = async (
 };
 
 /**
- * Sync current user profile from server
+ * Sync current user profile from Appwrite
  */
 export const syncUserProfile = async (token: string): Promise<boolean> => {
   try {
-    const strategy = new AuthSyncStrategy();
-
-    const syncData: AuthSyncData = {
-      action: 'profile_sync',
-      token,
-    };
-
-    if (!strategy.validate(syncData)) {
-      throw new Error('Invalid sync data');
-    }
-
-    const payload = await strategy.prepare(syncData);
-    const result = await strategy.upload(payload);
-    await strategy.onSuccess(result, payload);
-
+    // Fetch from Appwrite
+    const user = await authOnlineAPI.getCurrentUser(token);
+    
+    // Save to local storage
+    await authOfflineAPI.saveUserFromServer(user);
+    
+    console.log('[AuthSyncStrategy] User profile synced from Appwrite');
     return true;
   } catch (error) {
     console.error('[AuthSyncStrategy] Failed to sync user profile:', error);

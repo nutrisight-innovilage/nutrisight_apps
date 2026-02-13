@@ -20,13 +20,13 @@ export interface User {
 export interface AuthResponse {
   user: User;
   token: string;
+  refreshToken?: string; // Tambahkan ini karena digunakan di authOnlineAPI
 }
 
 export interface LoginRequest {
   email: string;
   password: string;
 }
-
 export interface RegisterRequest {
   email: string;
   password: string;
@@ -36,6 +36,7 @@ export interface RegisterRequest {
   height: string;
   gender: Gender;
   role: UserRole;
+  phone?: string; // Tambahkan ini
 }
 
 export interface UpdateUserRequest {
