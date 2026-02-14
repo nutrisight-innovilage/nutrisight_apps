@@ -243,10 +243,11 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  // Initial load
+  // Initial load - FIXED: Removed fetchMenu from dependency array
   useEffect(() => {
     fetchMenu();
-  }, [fetchMenu]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ✅ Only run once on mount
 
   // ---------------------------------------------------------------------------
   // Context Value

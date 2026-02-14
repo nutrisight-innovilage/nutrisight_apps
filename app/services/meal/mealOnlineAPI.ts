@@ -1,21 +1,14 @@
 /**
- * mealOnlineAPI.ts (CLEANED - APPWRITE VERSION)
+ * mealOnlineAPI.ts (FIXED - APPWRITE VERSION)
  * ---------------------------------------------------------------------------
- * Service layer untuk ONLINE meal & nutrition operations - STRICTLY following meal.ts types.
+ * Service layer untuk ONLINE meal & nutrition operations.
  * 
- * REMOVED BLOAT:
- * • ❌ YOLO photo analysis (not in types, no UI)
- * • ❌ Monthly trends (not in types)
- * • ❌ LLM features (not in types)
- * • ❌ Historical data sync (not in types)
- * • ❌ User feedback (not in types)
- * • ❌ Natural language parsing (not in types)
- * 
- * KEPT ONLY:
- * • ✅ analyzeMeal - Core nutrition calculation
- * • ✅ getWeeklyInsights - Matches WeeklyInsight type
- * • ✅ getNutritionGoals - Matches NutritionGoals type
- * • ✅ getPersonalizedThresholds - Used by mealService
+ * FIXES APPLIED:
+ * • ✅ JSON.stringify for items array (Appwrite limitation)
+ * • ✅ JSON.parse for goals nested objects
+ * • ✅ Proper type definitions (Raw vs Application types)
+ * • ✅ Real nutrition calculations from menu_items
+ * • ✅ Error handling improvements
  * ---------------------------------------------------------------------------
  */
 
@@ -38,35 +31,18 @@ import { CartItem } from '@/app/types/food';
 import { Models, Query } from 'appwrite';
 
 // ---------------------------------------------------------------------------
-// Types (STRICTLY from meal.ts + Appwrite extensions)
+// RAW Types (from Appwrite Database)
 // ---------------------------------------------------------------------------
 
 /**
- * PersonalizedThresholds - Used by mealService
+ * Raw Appwrite Document for NutritionScan
+ * items stored as JSON string (Appwrite limitation)
  */
-export interface PersonalizedThresholds {
-  calories: { min: number; max: number };
-  protein: { min: number; max: number };
-  carbs: { min: number; max: number };
-  fats: { min: number; max: number };
-  calculatedAt: string;
-  basedOn: {
-    age?: number;
-    weight?: number;
-    height?: number;
-    activityLevel?: string;
-    goal?: string;
-  };
-}
-
-/**
- * Appwrite Document extension for NutritionScan
- */
-interface NutritionScanDocument extends Models.Document {
+interface NutritionScanDocumentRaw extends Models.Document {
   userId: string;
   date: string;
   mealType?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
-  items: CartItem[];
+  items: string; // ✅ JSON string in database
   ricePortion: number;
   totalCalories: number;
   totalProtein: number;
@@ -76,14 +52,26 @@ interface NutritionScanDocument extends Models.Document {
 }
 
 /**
- * Appwrite Document extension for NutritionGoals
+ * Raw Appwrite Document for NutritionGoals
+ * All nested objects stored as JSON strings
  */
-interface NutritionGoalsDocument extends Models.Document {
-  calories: { min: number; max: number };
-  protein: { min: number; max: number; label: string };
-  carbs: { min: number; max: number; label: string };
-  fats: { min: number; max: number; label: string };
+interface NutritionGoalsDocumentRaw extends Models.Document {
   userId: string;
+  calories: string; // ✅ JSON string: { min, max }
+  protein: string;  // ✅ JSON string: { min, max, label }
+  carbs: string;    // ✅ JSON string: { min, max, label }
+  fats: string;     // ✅ JSON string: { min, max, label }
+}
+
+/**
+ * Menu item nutrition data (from menu_items collection)
+ */
+interface MenuItemNutrition {
+  id: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,9 +79,9 @@ interface NutritionGoalsDocument extends Models.Document {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert Appwrite document to NutritionScan
+ * Convert Raw Appwrite Document to NutritionScan
  */
-const convertToNutritionScan = (doc: NutritionScanDocument): NutritionScan => {
+const convertToNutritionScan = (doc: NutritionScanDocumentRaw): NutritionScan => {
   const date = new Date(doc.date);
   
   return {
@@ -119,60 +107,126 @@ const convertToNutritionScan = (doc: NutritionScanDocument): NutritionScan => {
 };
 
 /**
- * Convert NutritionGoalsDocument to NutritionGoals
+ * Convert Raw NutritionGoals Document to NutritionGoals
+ * Parse all JSON strings
  */
-const convertToNutritionGoals = (doc: NutritionGoalsDocument): NutritionGoals => {
-  return {
-    calories: doc.calories, // Assuming calories stored in carbs field
-    protein: doc.protein,
-    carbs: doc.carbs,
-    fats: doc.fats,
-  };
+const convertToNutritionGoals = (doc: NutritionGoalsDocumentRaw): NutritionGoals => {
+  try {
+    return {
+      calories: JSON.parse(doc.calories),
+      protein: JSON.parse(doc.protein),
+      carbs: JSON.parse(doc.carbs),
+      fats: JSON.parse(doc.fats),
+    };
+  } catch (error) {
+    console.error('[MealOnlineAPI] Failed to parse nutrition goals:', error);
+    // Return default structure if parsing fails
+    return {
+      calories: { min: 1800, max: 2200 },
+      protein: { min: 50, max: 100, label: 'Moderate' },
+      carbs: { min: 200, max: 300, label: 'Moderate' },
+      fats: { min: 50, max: 80, label: 'Moderate' },
+    };
+  }
 };
 
 // ---------------------------------------------------------------------------
-// Meal Online API (Cleaned)
+// Meal Online API (FIXED)
 // ---------------------------------------------------------------------------
 
 export class MealOnlineAPI {
   // -------------------------------------------------------------------------
-  // Core Meal Analysis
+  // Core Meal Analysis (FIXED)
   // -------------------------------------------------------------------------
 
   /**
    * Analyze meal and calculate nutrition
-   * Returns NutritionScan matching meal.ts types
+   * FIXED: Real nutrition calculations from menu_items
    */
   static async analyzeMeal(request: AnalyzeMealRequest): Promise<AnalyzeMealResponse> {
     try {
       console.log('[MealOnlineAPI] Analyzing meal...');
 
-      // Calculate nutrition totals
-      const totalCalories = request.items.reduce((sum, item) => {
-        // TODO: Get actual nutrition data from food database
-        return sum + (item.quantity * 100); // Placeholder calculation
-      }, 0);
+      // ========================================================================
+      // STEP 1: Fetch REAL nutrition data from menu_items
+      // ========================================================================
+      
+      const itemIds = request.items.map(item => item.id);
+      
+      const nutritionData = await Promise.all(
+        itemIds.map(async (id) => {
+          try {
+            const doc = await databases.getDocument(
+              DATABASE_ID,
+              COLLECTIONS.MENU_ITEMS,
+              id
+            );
+            
+            return {
+              id: doc.$id,
+              calories: doc.calories || 0,
+              protein: doc.protein || 0,
+              carbs: doc.carbs || 0,
+              fat: doc.fat || 0,
+            } as MenuItemNutrition;
+          } catch (error) {
+            console.error(`[MealOnlineAPI] Failed to fetch nutrition for ${id}:`, error);
+            return null;
+          }
+        })
+      );
 
-      const totalProtein = request.items.reduce((sum, item) => {
-        return sum + (item.quantity * 10); // Placeholder
-      }, 0);
+      // ========================================================================
+      // STEP 2: Create nutrition map for quick lookup
+      // ========================================================================
+      
+      const nutritionMap: Record<string, MenuItemNutrition> = {};
+      nutritionData.forEach(data => {
+        if (data) {
+          nutritionMap[data.id] = data;
+        }
+      });
 
-      const totalCarbs = request.items.reduce((sum, item) => {
-        return sum + (item.quantity * 20); // Placeholder
-      }, 0);
+      // ========================================================================
+      // STEP 3: Calculate totals with REAL data
+      // ========================================================================
+      
+      let totalCalories = 0;
+      let totalProtein = 0;
+      let totalCarbs = 0;
+      let totalFats = 0;
 
-      const totalFats = request.items.reduce((sum, item) => {
-        return sum + (item.quantity * 5); // Placeholder
-      }, 0);
+      request.items.forEach(item => {
+        const nutrition = nutritionMap[item.id];
+        if (nutrition) {
+          totalCalories += nutrition.calories * item.quantity;
+          totalProtein += nutrition.protein * item.quantity;
+          totalCarbs += nutrition.carbs * item.quantity;
+          totalFats += nutrition.fat * item.quantity;
+        } else {
+          console.warn(`[MealOnlineAPI] No nutrition data found for item: ${item.id}`);
+        }
+      });
 
-      // Add rice nutrition
+      // ========================================================================
+      // STEP 4: Add rice nutrition (based on grams)
+      // ========================================================================
+      
       const riceCalories = request.riceGrams * 1.3; // ~130 cal per 100g
       const riceProtein = request.riceGrams * 0.027; // ~2.7g per 100g
       const riceCarbs = request.riceGrams * 0.28; // ~28g per 100g
       const riceFats = request.riceGrams * 0.003; // ~0.3g per 100g
 
-      // Create scan document
-      const scanDoc = await databases.createDocument<NutritionScanDocument>(
+      totalCalories += riceCalories;
+      totalProtein += riceProtein;
+      totalCarbs += riceCarbs;
+      totalFats += riceFats;
+
+      // ========================================================================
+      // STEP 5: Create scan document in Appwrite
+      // ========================================================================
+      
+      const scanDoc = await databases.createDocument<NutritionScanDocumentRaw>(
         DATABASE_ID,
         COLLECTIONS.NUTRITION_SCANS,
         generateId(),
@@ -180,16 +234,20 @@ export class MealOnlineAPI {
           userId: request.metadata.userId || 'unknown',
           date: new Date().toISOString(),
           mealType: request.metadata.mealType,
-          items: request.items,
+          items: JSON.stringify(request.items), // ✅ FIXED: Convert to JSON string
           ricePortion: request.ricePortion,
-          totalCalories: totalCalories + riceCalories,
-          totalProtein: totalProtein + riceProtein,
-          totalCarbs: totalCarbs + riceCarbs,
-          totalFats: totalFats + riceFats,
+          totalCalories: Math.round(totalCalories),
+          totalProtein: Math.round(totalProtein),
+          totalCarbs: Math.round(totalCarbs),
+          totalFats: Math.round(totalFats),
           notes: request.metadata.notes,
         }
       );
 
+      // ========================================================================
+      // STEP 6: Convert to application type
+      // ========================================================================
+      
       const scan = convertToNutritionScan(scanDoc);
 
       console.log('[MealOnlineAPI] ✅ Meal analyzed and saved');
@@ -211,19 +269,24 @@ export class MealOnlineAPI {
   }
 
   // -------------------------------------------------------------------------
-  // Personalized Thresholds (Used by mealService)
+  // Personalized Thresholds
   // -------------------------------------------------------------------------
 
   /**
    * Get personalized nutrition thresholds
-   * Used by mealService.getPersonalizedThresholds()
+   * TODO: Implement calculation based on user profile (age, weight, height, activity)
    */
-  static async getPersonalizedThresholds(): Promise<PersonalizedThresholds | null> {
+  static async getPersonalizedThresholds(userId?: string): Promise<PersonalizedThresholds | null> {
     try {
       console.log('[MealOnlineAPI] Getting personalized thresholds...');
 
-      // TODO: Implement actual calculation based on user profile
-      // For now, return default values
+      // TODO: Fetch user profile and calculate based on:
+      // - BMR (Basal Metabolic Rate)
+      // - Activity level
+      // - Age, weight, height
+      // - Goal (lose weight, maintain, gain weight)
+
+      // For now, return sensible defaults
       const thresholds: PersonalizedThresholds = {
         calories: { min: 1800, max: 2200 },
         protein: { min: 50, max: 100 },
@@ -236,7 +299,7 @@ export class MealOnlineAPI {
         },
       };
 
-      console.log('[MealOnlineAPI] ✅ Personalized thresholds returned');
+      console.log('[MealOnlineAPI] ✅ Personalized thresholds returned (defaults)');
       return thresholds;
     } catch (error) {
       console.error('[MealOnlineAPI] Error getting personalized thresholds:', error);
@@ -245,17 +308,17 @@ export class MealOnlineAPI {
   }
 
   // -------------------------------------------------------------------------
-  // Weekly Insights (Matches meal.ts WeeklyInsight type)
+  // Weekly Insights
   // -------------------------------------------------------------------------
 
   /**
-   * Get weekly insights matching WeeklyInsight type from meal.ts
+   * Get weekly insights from nutrition scans
    */
   static async getWeeklyInsights(
+    userId: string,
     startDate?: string,
-    endDate?: string,
-    includeAdvice: boolean = false
-  ): Promise<WeeklyInsight & { advice?: string }> {
+    endDate?: string
+  ): Promise<WeeklyInsight> {
     try {
       console.log('[MealOnlineAPI] Fetching weekly insights...');
 
@@ -263,20 +326,22 @@ export class MealOnlineAPI {
       const end = endDate ? new Date(endDate) : new Date();
       const start = startDate ? new Date(startDate) : new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-      // Fetch scans in date range
-      const response = await databases.listDocuments<NutritionScanDocument>(
+      // Fetch scans in date range for this user
+      const response = await databases.listDocuments<NutritionScanDocumentRaw>(
         DATABASE_ID,
         COLLECTIONS.NUTRITION_SCANS,
         [
+          Query.equal('userId', userId),
           Query.greaterThan('date', start.toISOString()),
           Query.lessThan('date', end.toISOString()),
           Query.orderDesc('date'),
+          Query.limit(100), // Max 100 scans
         ]
       );
 
       const scans = response.documents;
 
-      // Calculate insights matching WeeklyInsight type
+      // Calculate insights
       const totalCalories = scans.reduce((sum, s) => sum + s.totalCalories, 0);
       const totalProtein = scans.reduce((sum, s) => sum + s.totalProtein, 0);
       const totalCarbs = scans.reduce((sum, s) => sum + s.totalCarbs, 0);
@@ -285,7 +350,7 @@ export class MealOnlineAPI {
 
       const insights: WeeklyInsight = {
         totalCalories,
-        avgCalories: mealsCount > 0 ? totalCalories / mealsCount : 0,
+        avgCalories: mealsCount > 0 ? Math.round(totalCalories / mealsCount) : 0,
         totalProtein,
         totalCarbs,
         totalFats,
@@ -293,9 +358,6 @@ export class MealOnlineAPI {
       };
 
       console.log('[MealOnlineAPI] ✅ Weekly insights calculated');
-
-      // Note: includeAdvice parameter kept for compatibility but not implemented
-      // as LLM advice is not in meal.ts types
       return insights;
     } catch (error) {
       console.error('[MealOnlineAPI] Error fetching weekly insights:', error);
@@ -304,21 +366,23 @@ export class MealOnlineAPI {
   }
 
   // -------------------------------------------------------------------------
-  // Nutrition Goals (Matches meal.ts NutritionGoals type)
+  // Nutrition Goals (FIXED)
   // -------------------------------------------------------------------------
 
   /**
-   * Get nutrition goals matching NutritionGoals type from meal.ts
+   * Get nutrition goals
+   * FIXED: Parse JSON strings from Appwrite
    */
-  static async getNutritionGoals(): Promise<NutritionGoals | null> {
+  static async getNutritionGoals(userId: string): Promise<NutritionGoals | null> {
     try {
       console.log('[MealOnlineAPI] Fetching nutrition goals...');
 
-      // Fetch latest goals for current user
-      const response = await databases.listDocuments<NutritionGoalsDocument>(
+      // Fetch latest goals for user
+      const response = await databases.listDocuments<NutritionGoalsDocumentRaw>(
         DATABASE_ID,
         COLLECTIONS.NUTRITION_GOALS,
         [
+          Query.equal('userId', userId),
           Query.orderDesc('$createdAt'),
           Query.limit(1),
         ]
@@ -336,6 +400,134 @@ export class MealOnlineAPI {
     } catch (error) {
       console.error('[MealOnlineAPI] Error fetching nutrition goals:', error);
       return null;
+    }
+  }
+
+  /**
+   * Save/Update nutrition goals
+   * FIXED: Stringify nested objects before saving
+   */
+  static async saveNutritionGoals(userId: string, goals: NutritionGoals): Promise<boolean> {
+    try {
+      console.log('[MealOnlineAPI] Saving nutrition goals...');
+
+      // Check if goals already exist
+      const existingGoals = await databases.listDocuments<NutritionGoalsDocumentRaw>(
+        DATABASE_ID,
+        COLLECTIONS.NUTRITION_GOALS,
+        [
+          Query.equal('userId', userId),
+          Query.limit(1),
+        ]
+      );
+
+      const goalsData = {
+        userId,
+        calories: JSON.stringify(goals.calories), // ✅ FIXED: Stringify
+        protein: JSON.stringify(goals.protein),   // ✅ FIXED: Stringify
+        carbs: JSON.stringify(goals.carbs),       // ✅ FIXED: Stringify
+        fats: JSON.stringify(goals.fats),         // ✅ FIXED: Stringify
+      };
+
+      if (existingGoals.documents.length > 0) {
+        // Update existing
+        await databases.updateDocument(
+          DATABASE_ID,
+          COLLECTIONS.NUTRITION_GOALS,
+          existingGoals.documents[0].$id,
+          goalsData
+        );
+      } else {
+        // Create new
+        await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.NUTRITION_GOALS,
+          generateId(),
+          goalsData
+        );
+      }
+
+      console.log('[MealOnlineAPI] ✅ Nutrition goals saved');
+      return true;
+    } catch (error) {
+      console.error('[MealOnlineAPI] Error saving nutrition goals:', error);
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Scan Management
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get scan by ID
+   */
+  static async getScanById(scanId: string): Promise<NutritionScan | null> {
+    try {
+      const doc = await databases.getDocument<NutritionScanDocumentRaw>(
+        DATABASE_ID,
+        COLLECTIONS.NUTRITION_SCANS,
+        scanId
+      );
+
+      return convertToNutritionScan(doc);
+    } catch (error) {
+      console.error('[MealOnlineAPI] Error fetching scan:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Update scan
+   */
+  static async updateScan(
+    scanId: string, 
+    updates: Partial<Omit<NutritionScan, 'id' | 'userId'>>
+  ): Promise<boolean> {
+    try {
+      console.log('[MealOnlineAPI] Updating scan...');
+
+      // Note: Only update fields that are in Appwrite schema
+      const updateData: any = {};
+
+      if (updates.calories !== undefined) updateData.totalCalories = updates.calories;
+      if (updates.protein !== undefined) updateData.totalProtein = updates.protein;
+      if (updates.carbs !== undefined) updateData.totalCarbs = updates.carbs;
+      if (updates.fats !== undefined) updateData.totalFats = updates.fats;
+
+      await databases.updateDocument(
+        DATABASE_ID,
+        COLLECTIONS.NUTRITION_SCANS,
+        scanId,
+        updateData
+      );
+
+      console.log('[MealOnlineAPI] ✅ Scan updated');
+      return true;
+    } catch (error) {
+      console.error('[MealOnlineAPI] Error updating scan:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Delete scan
+   */
+  static async deleteScan(scanId: string): Promise<boolean> {
+    try {
+      console.log('[MealOnlineAPI] Deleting scan...');
+
+      await databases.deleteDocument(
+        DATABASE_ID,
+        COLLECTIONS.NUTRITION_SCANS,
+        scanId
+      );
+
+      console.log('[MealOnlineAPI] ✅ Scan deleted');
+      return true;
+    } catch (error) {
+      console.error('[MealOnlineAPI] Error deleting scan:', error);
+      return false;
     }
   }
 
@@ -361,8 +553,27 @@ export class MealOnlineAPI {
   }
 }
 
-// Export only types that are actually used
+// ---------------------------------------------------------------------------
+// Export Types
+// ---------------------------------------------------------------------------
+
+export interface PersonalizedThresholds {
+  calories: { min: number; max: number };
+  protein: { min: number; max: number };
+  carbs: { min: number; max: number };
+  fats: { min: number; max: number };
+  calculatedAt: string;
+  basedOn: {
+    age?: number;
+    weight?: number;
+    height?: number;
+    activityLevel?: string;
+    goal?: string;
+  };
+}
+
 export type {
-  NutritionScanDocument,
-  NutritionGoalsDocument,
+  NutritionScanDocumentRaw,
+  NutritionGoalsDocumentRaw,
+  MenuItemNutrition,
 };

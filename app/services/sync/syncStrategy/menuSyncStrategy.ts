@@ -45,10 +45,10 @@ export class MenuSyncStrategy implements SyncStrategy {
     // Get last sync time if not provided
     const lastSyncTime = data.lastSyncTime || await menuOfflineAPI.getLastSync();
     
-    const payload: SyncPayload = {
-      id: `menu_sync_${Date.now()}`,
-      type: 'meal',
-      data: {
+   const payload: SyncPayload = {
+  id: `menu_sync_${Date.now()}`,
+  type: 'menu',  
+  data: {
         ...data,
         lastSyncTime: data.forceRefresh ? undefined : lastSyncTime,
       },

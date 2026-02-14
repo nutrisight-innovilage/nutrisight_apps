@@ -332,6 +332,120 @@ export const authOfflineAPI = {
       return false;
     }
   },
+  // ADD TO authOfflineAPI.ts:
+
+/**
+ * Update email (offline) - separate function
+ */
+updateEmail: async (
+  userId: string,
+  newEmail: string,
+  currentPassword: string
+): Promise<void> => {
+  await delay(500);
+
+  try {
+    // Verify password
+    const passwordsJson = await AsyncStorage.getItem(STORAGE_KEYS.PASSWORDS);
+    const passwords: Record<string, string> = passwordsJson ? JSON.parse(passwordsJson) : {};
+
+    if (passwords[userId] !== currentPassword) {
+      throw new Error('Invalid password');
+    }
+
+    // Check if new email already exists
+    const usersJson = await AsyncStorage.getItem(STORAGE_KEYS.USERS_DATA);
+    const users: User[] = usersJson ? JSON.parse(usersJson) : [];
+
+    const emailExists = users.some(
+      u => u.email.toLowerCase() === newEmail.toLowerCase() && u.id !== userId
+    );
+
+    if (emailExists) {
+      throw new Error('Email already in use');
+    }
+
+    // Update email
+    const userIndex = users.findIndex(u => u.id === userId);
+    if (userIndex === -1) {
+      throw new Error('User not found');
+    }
+
+    users[userIndex].email = newEmail;
+    users[userIndex].updatedAt = new Date().toISOString();
+
+    await AsyncStorage.setItem(STORAGE_KEYS.USERS_DATA, JSON.stringify(users));
+
+    // Update auth data
+    const authData = await authOfflineAPI.getCurrentUser();
+    if (authData) {
+      authData.user.email = newEmail;
+      await AsyncStorage.setItem(STORAGE_KEYS.AUTH_DATA, JSON.stringify(authData));
+    }
+
+    console.log('[authOfflineAPI] Email updated offline');
+  } catch (error) {
+    throw error;
+  }
+},
+
+/**
+ * Verify token (offline) - just checks if session exists
+ */
+verifyToken: async (token: string): Promise<AuthResponse> => {
+  await delay(300);
+
+  try {
+    const authData = await authOfflineAPI.getCurrentUser();
+    
+    if (!authData || authData.token !== token) {
+      throw new Error('Invalid or expired token');
+    }
+
+    return authData;
+  } catch (error) {
+    throw error;
+  }
+},
+
+/**
+ * Refresh token (offline) - generates new token
+ */
+refreshToken: async (oldToken: string): Promise<AuthResponse> => {
+  await delay(300);
+
+  try {
+    const authData = await authOfflineAPI.getCurrentUser();
+    
+    if (!authData) {
+      throw new Error('No active session');
+    }
+
+    // Generate new token
+    const newToken = generateToken(authData.user.id);
+    authData.token = newToken;
+
+    await AsyncStorage.setItem(STORAGE_KEYS.AUTH_DATA, JSON.stringify(authData));
+
+    return authData;
+  } catch (error) {
+    throw error;
+  }
+},
+
+/**
+ * Request password reset (offline) - not applicable
+ */
+requestPasswordReset: async (email: string): Promise<void> => {
+  throw new Error('Password reset not available offline. Please connect to internet.');
+},
+
+/**
+ * Reset password (offline) - not applicable
+ */
+resetPassword: async (userId: string, secret: string, newPassword: string): Promise<void> => {
+  throw new Error('Password reset not available offline. Please connect to internet.');
+},
 
   // ---------------------------------------------------------------------------
   // Sync Support

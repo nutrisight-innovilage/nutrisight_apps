@@ -11,6 +11,12 @@
  * • Sync status tracking
  * ---------------------------------------------------------------------------
  */
+if (typeof window === 'undefined') {
+  // @ts-ignore
+  global.window = global;
+}
+
+
 
 import { CartItem } from '@/app/types/food';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,7 +29,10 @@ import {
   NutritionScan,
   DateRangeFilter,
   ScanSortOption,
+  WeeklyInsight,
+  NutritionGoals,
 } from '@/app/types/meal';
+import { PersonalizedThresholds } from './mealOnlineAPI';
 
 // ---------------------------------------------------------------------------
 // Types untuk Offline Layer
@@ -119,6 +128,8 @@ const STORAGE_KEYS = {
   
   // Local nutrition data
   FOOD_NUTRITION_DB: '@nutrition_analysis:food_nutrition_db',
+    NUTRITION_GOALS_PREFIX: '@nutrition_analysis:goals_',
+  THRESHOLDS_PREFIX: '@nutrition_analysis:thresholds_',
   
   // Sync status
   LAST_SYNC_TIME: '@nutrition_analysis:last_sync_time',
@@ -160,7 +171,13 @@ const loadFromStorage = async <T>(key: string): Promise<T | null> => {
     const data = await AsyncStorage.getItem(key);
     return data ? JSON.parse(data) : null;
   } catch (error) {
-    console.error(`[MealOfflineAPI] Failed to load ${key}:`, error);
+    
+    if (error instanceof Error) {
+      console.error(`[MealOfflineAPI] Failed to load ${key}:`, error.message);
+      console.error('Stack:', error.stack);
+    } else {
+      console.error(`[MealOfflineAPI] Failed to load ${key}:`, error);
+    }
     return null;
   }
 };
@@ -378,6 +395,117 @@ export class MealOfflineAPI {
       createdAt: metadata.createdAt,
     };
   }
+  // ADD TO mealOfflineAPI.ts:
+
+// -------------------------------------------------------------------------
+// NEW: Nutrition Goals Management (Offline)
+// -------------------------------------------------------------------------
+
+/**
+ * Get nutrition goals (offline)
+ */
+static async getNutritionGoals(userId: string): Promise<NutritionGoals | null> {
+  const key = `${STORAGE_KEYS.COMPLETED_SCANS}_goals_${userId}`;
+  const goals = await loadFromStorage<NutritionGoals>(key);
+  return goals;
+}
+
+/**
+ * Save nutrition goals (offline)
+ */
+static async saveNutritionGoals(userId: string, goals: NutritionGoals): Promise<void> {
+  const key = `${STORAGE_KEYS.COMPLETED_SCANS}_goals_${userId}`;
+  await saveToStorage(key, goals);
+  console.log('[MealOfflineAPI] Nutrition goals saved offline');
+}
+
+// -------------------------------------------------------------------------
+// NEW: Weekly Insights (Offline Calculation)
+// -------------------------------------------------------------------------
+
+/**
+ * Get weekly insights (offline calculation)
+ */
+static async getWeeklyInsights(
+  userId: string,
+  startDate?: string,
+  endDate?: string
+): Promise<WeeklyInsight> {
+  const end = endDate ? new Date(endDate) : new Date();
+  const start = startDate 
+    ? new Date(startDate) 
+    : new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  // Get scans in date range
+  const allScans = await this.getAllLocalScans();
+  const scans = allScans.filter(scan => {
+    const scanDate = new Date(scan.date);
+    return scanDate >= start && scanDate <= end && scan.userId === userId;
+  });
+
+  // Calculate insights
+  const totalCalories = scans.reduce((sum, s) => sum + s.calories, 0);
+  const totalProtein = scans.reduce((sum, s) => sum + s.protein, 0);
+  const totalCarbs = scans.reduce((sum, s) => sum + s.carbs, 0);
+  const totalFats = scans.reduce((sum, s) => sum + s.fats, 0);
+  const mealsCount = scans.length;
+
+  return {
+    totalCalories,
+    avgCalories: mealsCount > 0 ? Math.round(totalCalories / mealsCount) : 0,
+    totalProtein,
+    totalCarbs,
+    totalFats,
+    mealsCount,
+  };
+}
+
+// -------------------------------------------------------------------------
+// NEW: Personalized Thresholds (Offline - Basic Calculation)
+// -------------------------------------------------------------------------
+
+/**
+ * Get personalized thresholds (offline)
+ * Basic calculation based on typical requirements
+ */
+static async getPersonalizedThresholds(userId: string): Promise<PersonalizedThresholds | null> {
+  // Try to get cached thresholds
+  const key = `${STORAGE_KEYS.COMPLETED_SCANS}_thresholds_${userId}`;
+  const cached = await loadFromStorage<PersonalizedThresholds>(key);
+  
+  if (cached) {
+    return cached;
+  }
+
+  // Return default thresholds
+  const thresholds: PersonalizedThresholds = {
+    calories: { min: 1800, max: 2200 },
+    protein: { min: 50, max: 100 },
+    carbs: { min: 200, max: 300 },
+    fats: { min: 50, max: 80 },
+    calculatedAt: new Date().toISOString(),
+    basedOn: {
+      activityLevel: 'moderate',
+      goal: 'maintain',
+    },
+  };
+
+  // Cache for offline use
+  await saveToStorage(key, thresholds);
+  
+  return thresholds;
+}
+
+/**
+ * Save personalized thresholds (from server)
+ */
+static async savePersonalizedThresholds(
+  userId: string, 
+  thresholds: PersonalizedThresholds
+): Promise<void> {
+  const key = `${STORAGE_KEYS.COMPLETED_SCANS}_thresholds_${userId}`;
+  await saveToStorage(key, thresholds);
+}
 
   // -------------------------------------------------------------------------
   // Data Preparation for Sync

@@ -1,28 +1,14 @@
 /**
- * mealService.ts (CLEANED - SyncManager Integration)
+ * mealService.ts (FIXED - SyncManager Integration + Complete Offline Support)
  * ---------------------------------------------------------------------------
  * TRUE OFFLINE-FIRST - STRICTLY following meal.ts types.
  * 
- * REMOVED BLOAT:
- * • ❌ analyzeFoodFromPhoto (not in types, no UI)
- * • ❌ sendHistoricalData (not in types)
- * • ❌ sendFeedback (not in types)
- * • ❌ Pending photos/feedback queues (not in types)
- * 
- * KEPT ONLY:
- * • ✅ Cart operations (local-only)
- * • ✅ Meal metadata operations (local-only)
- * • ✅ submitAnalysis (core - syncs to server)
- * • ✅ Scans history (local-first)
- * • ✅ updateScan/deleteScan (with sync)
- * • ✅ getWeeklyInsights (read-only)
- * • ✅ getNutritionGoals (read-only)
- * • ✅ getPersonalizedThresholds (read-only)
- * 
- * Pattern:
- * 1. Write to local storage (MealOfflineAPI)
- * 2. Queue for sync (SyncManager.sync)
- * 3. SyncManager handles rest automatically
+ * FIXES APPLIED:
+ * • ✅ Weekly insights with offline fallback
+ * • ✅ Nutrition goals with offline fallback
+ * • ✅ Personalized thresholds with offline fallback
+ * • ✅ Proper userId handling
+ * • ✅ All TODO implementations completed
  * ---------------------------------------------------------------------------
  */
 
@@ -49,6 +35,9 @@ import { MealOnlineAPI, PersonalizedThresholds } from '@/app/services/meal/mealO
 // Import SYNC
 import { getSyncManager } from '@/app/services/sync/syncManager';
 
+// ✅ FIXED: Import auth to get userId
+import authService from '@/app/services/auth/authService';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -60,7 +49,7 @@ interface MealServiceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Meal Service Class (Cleaned)
+// Meal Service Class (FIXED)
 // ---------------------------------------------------------------------------
 
 class MealService {
@@ -71,6 +60,7 @@ class MealService {
   };
 
   private isOnline: boolean = false;
+  private currentUserId: string | null = null;
 
   constructor() {
     this.setupNetworkListener();
@@ -99,10 +89,42 @@ class MealService {
   private async initializeService(): Promise<void> {
     try {
       await MealOfflineAPI.initializeOfflineAPI();
+      
+      // Get current user ID
+      await this.updateCurrentUserId();
+      
       console.log('[MealService] ✅ Service initialized');
     } catch (error) {
       console.error('[MealService] Initialization failed:', error);
     }
+  }
+
+  /**
+   * ✅ NEW: Update current user ID from auth service
+   */
+  private async updateCurrentUserId(): Promise<void> {
+    try {
+      const authData = await authService.getCurrentUser();
+      this.currentUserId = authData?.user.id || null;
+    } catch (error) {
+      console.error('[MealService] Failed to get user ID:', error);
+      this.currentUserId = null;
+    }
+  }
+
+  /**
+   * ✅ NEW: Get current user ID (with auto-update)
+   */
+  private async getCurrentUserId(): Promise<string> {
+    if (!this.currentUserId) {
+      await this.updateCurrentUserId();
+    }
+    
+    if (!this.currentUserId) {
+      throw new Error('User not authenticated');
+    }
+    
+    return this.currentUserId;
   }
 
   /**
@@ -271,6 +293,9 @@ class MealService {
    */
   async submitAnalysis(): Promise<AnalyzeMealResponse> {
     try {
+      // ✅ FIXED: Get userId
+      const userId = await this.getCurrentUserId();
+
       // 1. Prepare & validate data
       const mealData = await MealOfflineAPI.prepareScanForSync();
 
@@ -280,6 +305,9 @@ class MealService {
           message: 'Data tidak valid untuk dianalisis',
         };
       }
+
+      // ✅ FIXED: Add userId to metadata
+      mealData.metadata.userId = userId;
 
       // 2. Calculate nutrition OFFLINE (instant result)
       const nutrition = this.config.offlineCalculation
@@ -292,6 +320,7 @@ class MealService {
       // 3. Create local scan (available immediately)
       const localScan: NutritionScan = {
         id: `local_${Date.now()}`,
+        userId,
         foodName: mealData.metadata.mealType 
           ? `${mealData.metadata.mealType.charAt(0).toUpperCase() + mealData.metadata.mealType.slice(1)}`
           : 'My Meal',
@@ -498,25 +527,27 @@ class MealService {
   }
 
   // ===========================================================================
-  // INSIGHTS & ANALYTICS (HYBRID - Online preferred, offline fallback)
+  // INSIGHTS & ANALYTICS (FIXED - HYBRID with Offline Fallback)
   // ===========================================================================
 
   /**
-   * Get weekly insights
+   * ✅ FIXED: Get weekly insights
    * 
    * Flow:
    * 1. Try online if available (MealOnlineAPI.getWeeklyInsights)
-   * 2. Fallback to local calculation
+   * 2. Fallback to local calculation (MealOfflineAPI.getWeeklyInsights)
    */
   async getWeeklyInsights(
     startDate?: string,
     endDate?: string
   ): Promise<WeeklyInsight> {
     try {
+      const userId = await this.getCurrentUserId();
+
       // Try online first if available
       if (this.isOnline) {
         try {
-          const insights = await MealOnlineAPI.getWeeklyInsights(startDate, endDate);
+          const insights = await MealOnlineAPI.getWeeklyInsights(userId, startDate, endDate);
           console.log('[MealService] ✅ Weekly insights from server');
           return insights;
         } catch (onlineError) {
@@ -524,9 +555,10 @@ class MealService {
         }
       }
 
-      // Fallback to local calculation
-      // TODO: Implement local insights calculation
-      throw new Error('Local insights calculation not yet implemented');
+      // ✅ FIXED: Fallback to local calculation
+      const insights = await MealOfflineAPI.getWeeklyInsights(userId, startDate, endDate);
+      console.log('[MealService] ✅ Weekly insights calculated locally');
+      return insights;
     } catch (error) {
       console.error('[MealService] Failed to get weekly insights:', error);
       throw error;
@@ -534,18 +566,33 @@ class MealService {
   }
 
   /**
-   * Get personalized thresholds (ONLINE-ONLY)
+   * ✅ FIXED: Get personalized thresholds (HYBRID with cache)
    */
   async getPersonalizedThresholds(): Promise<PersonalizedThresholds | null> {
     try {
-      if (!this.isOnline) {
-        console.warn('[MealService] Cannot get thresholds - device is offline');
-        return null;
+      const userId = await this.getCurrentUserId();
+
+      // Try online first
+      if (this.isOnline) {
+        try {
+          const thresholds = await MealOnlineAPI.getPersonalizedThresholds(userId);
+          console.log('[MealService] ✅ Personalized thresholds from server');
+          
+          // ✅ FIXED: Cache for offline use
+          if (thresholds) {
+            await MealOfflineAPI.savePersonalizedThresholds(userId, thresholds);
+          }
+          
+          return thresholds;
+        } catch (onlineError) {
+          console.warn('[MealService] Failed to get online thresholds:', onlineError);
+        }
       }
 
-      const thresholds = await MealOnlineAPI.getPersonalizedThresholds();
-      console.log('[MealService] ✅ Personalized thresholds from server');
-      return thresholds;
+      // ✅ FIXED: Fallback to cached/default
+      const cached = await MealOfflineAPI.getPersonalizedThresholds(userId);
+      console.log('[MealService] ✅ Personalized thresholds from cache');
+      return cached;
     } catch (error) {
       console.error('[MealService] Failed to get personalized thresholds:', error);
       return null;
@@ -553,23 +600,33 @@ class MealService {
   }
 
   /**
-   * Get nutrition goals (HYBRID)
+   * ✅ FIXED: Get nutrition goals (HYBRID with cache)
    */
   async getNutritionGoals(): Promise<NutritionGoals | null> {
     try {
+      const userId = await this.getCurrentUserId();
+
       // Try online first
       if (this.isOnline) {
         try {
-          const goals = await MealOnlineAPI.getNutritionGoals();
+          const goals = await MealOnlineAPI.getNutritionGoals(userId);
           console.log('[MealService] ✅ Nutrition goals from server');
+          
+          // ✅ FIXED: Cache for offline use
+          if (goals) {
+            await MealOfflineAPI.saveNutritionGoals(userId, goals);
+          }
+          
           return goals;
         } catch (onlineError) {
           console.warn('[MealService] Failed to get online goals:', onlineError);
         }
       }
 
-      // TODO: Implement local goals storage
-      return null;
+      // ✅ FIXED: Fallback to cached
+      const cached = await MealOfflineAPI.getNutritionGoals(userId);
+      console.log('[MealService] ✅ Nutrition goals from cache');
+      return cached;
     } catch (error) {
       console.error('[MealService] Failed to get nutrition goals:', error);
       return null;

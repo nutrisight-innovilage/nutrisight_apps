@@ -1,4 +1,4 @@
-# 📘 SyncManager - Comprehensive Documentation
+# 📘 SyncManager - Complete Documentation
 
 ## 📋 Table of Contents
 
@@ -92,29 +92,53 @@ interface SyncStrategy {
 ### 2. Sync Types
 
 ```typescript
-type SyncType = 'auth' | 'meal' | 'profile' | 'settings' | ...;
+type SyncType = 'meal' | 'photo' | 'feedback' | 'auth' | 'profile' | 'other' | 'menu';
 ```
 
 Setiap sync type harus punya strategy tersendiri.
 
-### 3. Sync Payload
+### 3. Sync Payload (ACTUAL IMPLEMENTATION)
 
 ```typescript
 interface SyncPayload {
-  id: string;              // Unique identifier
-  type: SyncType;          // Jenis sync
-  data: any;               // Data yang akan disync
-  priority: number;        // Priority (1-5)
-  retries: number;         // Jumlah retry attempts
-  maxRetries: number;      // Max retry allowed
-  status: 'pending' | 'processing' | 'failed';
-  createdAt: string;
-  lastAttemptAt: string | null;
-  error: string | null;
+  id: string;                    // Unique identifier
+  type: SyncType;                // Jenis sync
+  data: any;                     // Data yang akan disync
+  priority: number;              // Priority (1-5)
+  retryCount: number;            // Current retry count
+  maxRetries: number;            // Max retry allowed
+  createdAt: string;             // ISO timestamp
+  lastAttempt?: string;          // Last attempt timestamp
+  nextRetryAt?: string;          // Next retry scheduled time
+  error?: string;                // Last error message
 }
 ```
 
-### 4. Sync Flow
+### 4. Queue Stats (ACTUAL IMPLEMENTATION)
+
+```typescript
+interface QueueStats {
+  totalItems: number;                     // Total semua items
+  byType: Record<SyncType, number>;      // Count per type
+  byPriority: Record<number, number>;    // Count per priority (1-5)
+  failedItems: number;                   // Items exceeded max retries
+  avgRetries: number;                    // Average retry count
+}
+```
+
+### 5. Global Sync Status
+
+```typescript
+interface GlobalSyncStatus {
+  isOnline: boolean;              // Network status
+  isProcessing: boolean;          // Currently syncing?
+  lastSyncTime: string | null;    // Last successful sync
+  queueStats: QueueStats;         // Queue statistics
+  activeStrategy: SyncType | null; // Currently active strategy
+}
+```
+
+### 6. Sync Flow
 
 ```
 ┌─────────────┐
@@ -152,16 +176,28 @@ interface SyncPayload {
        │
        ├─── Success ───► onSuccess() ───► Remove from queue
        │
-       └─── Failure ───► onFailure() ───► Retry (with backoff)
+       └─── Failure ───► onFailure() ───► Retry (exponential backoff)
                                            │
                                            └─► Max retries? ─► Mark failed
+```
+
+### 7. Retry Delays (Exponential Backoff)
+
+```typescript
+const RETRY_DELAYS = [1000, 5000, 15000, 60000]; 
+// Attempt 1: 1 second
+// Attempt 2: 5 seconds
+// Attempt 3: 15 seconds
+// Attempt 4+: 60 seconds
 ```
 
 ---
 
 ## 📖 API Reference
 
-### Core Methods
+### SyncManager Methods
+
+#### Core Methods
 
 #### 1. `registerStrategy(type, strategy)`
 
@@ -170,6 +206,7 @@ Register strategy untuk sync type tertentu.
 ```typescript
 syncManager.registerStrategy('auth', authSyncStrategy);
 syncManager.registerStrategy('meal', mealSyncStrategy);
+syncManager.registerStrategy('menu', menuSyncStrategy);
 ```
 
 **Parameters:**
@@ -217,11 +254,20 @@ const result = await syncManager.processQueue();
 //   success: true,
 //   processedCount: 5,
 //   failedCount: 1,
-//   errors: [...]
+//   errors: [{ id: 'sync_123', error: 'Network timeout' }]
 // }
 ```
 
 **Returns:** `Promise<SyncResult>`
+
+```typescript
+interface SyncResult {
+  success: boolean;
+  processedCount: number;
+  failedCount: number;
+  errors: Array<{ id: string; error: string }>;
+}
+```
 
 **Auto-triggered when:**
 - Device comes back online
@@ -265,6 +311,9 @@ const result = await syncManager.syncBatch(5);
 // Sync max 5 items
 ```
 
+**Parameters:**
+- `batchSize: number` - Max items to process (default: 5)
+
 **Use case:**
 - Rate limiting
 - Memory management
@@ -280,21 +329,41 @@ Get global sync status.
 
 ```typescript
 const status = await syncManager.getStatus();
-// {
-//   isOnline: true,
-//   isProcessing: false,
-//   lastSyncTime: '2025-01-15T10:30:00Z',
-//   queueStats: {
-//     pending: 3,
-//     processing: 0,
-//     failed: 1,
-//     total: 4
-//   },
-//   activeStrategy: 'auth'
-// }
+console.log(status);
 ```
 
 **Returns:** `Promise<GlobalSyncStatus>`
+
+**Example Output:**
+```typescript
+{
+  isOnline: true,
+  isProcessing: false,
+  lastSyncTime: '2025-01-15T10:30:00.000Z',
+  queueStats: {
+    totalItems: 10,
+    byType: {
+      auth: 3,
+      meal: 5,
+      menu: 2,
+      photo: 0,
+      feedback: 0,
+      profile: 0,
+      other: 0
+    },
+    byPriority: {
+      1: 3,    // High priority
+      2: 5,    // Medium priority
+      3: 2,    // Low priority
+      4: 0,
+      5: 0
+    },
+    failedItems: 1,
+    avgRetries: 1.5
+  },
+  activeStrategy: 'auth'
+}
+```
 
 ---
 
@@ -304,7 +373,7 @@ Get jumlah pending items untuk specific type.
 
 ```typescript
 const count = await syncManager.getPendingCount('auth');
-// 3
+console.log(count); // 3
 ```
 
 **Use case:**
@@ -404,10 +473,10 @@ Remove items yang sudah exceed max retries.
 
 ```typescript
 const removed = await syncManager.removeFailed();
-// 2 (jumlah items yang diremove)
+console.log(`Removed ${removed} failed items`);
 ```
 
-**Returns:** `Promise<number>`
+**Returns:** `Promise<number>` - Number of removed items
 
 ---
 
@@ -433,11 +502,16 @@ Export diagnostic info untuk debugging.
 
 ```typescript
 const diagnostics = await syncManager.exportDiagnostics();
-// {
-//   status: {...},
-//   queue: '...',
-//   strategies: ['auth', 'meal']
-// }
+console.log(JSON.stringify(diagnostics, null, 2));
+```
+
+**Returns:**
+```typescript
+{
+  status: GlobalSyncStatus,
+  queue: string,              // JSON string of queue
+  strategies: string[]        // List of registered strategies
+}
 ```
 
 ---
@@ -448,6 +522,71 @@ Remove network listener (call on unmount).
 
 ```typescript
 syncManager.cleanup();
+```
+
+---
+
+#### 19. `hasStrategy(type)`
+
+Check if strategy registered untuk type tertentu.
+
+```typescript
+if (syncManager.hasStrategy('auth')) {
+  console.log('Auth strategy is registered');
+}
+```
+
+**Returns:** `boolean`
+
+---
+
+#### 20. `unregisterStrategy(type)`
+
+Unregister strategy (untuk testing/debugging).
+
+```typescript
+syncManager.unregisterStrategy('auth');
+```
+
+---
+
+### SyncQueue Methods (Advanced)
+
+#### Additional Queue Operations
+
+```typescript
+const syncQueue = getSyncQueue();
+
+// Get all items
+const all = await syncQueue.getAll();
+
+// Get items ready for processing
+const ready = await syncQueue.getReady();
+
+// Get next item
+const next = await syncQueue.getNext();
+
+// Get batch
+const batch = await syncQueue.getBatch(10);
+
+// Get oldest item
+const oldest = await syncQueue.getOldest();
+
+// Get items older than X hours
+const old = await syncQueue.getOlderThan(24);
+
+// Update priority
+await syncQueue.updatePriority('sync_123', 1);
+
+// Export/Import queue
+const exported = await syncQueue.export();
+await syncQueue.import(exported);
+
+// Check if empty
+const empty = await syncQueue.isEmpty();
+
+// Get size
+const size = await syncQueue.size();
 ```
 
 ---
@@ -463,10 +602,15 @@ async function updateProfile(data) {
   const result = await offlineAPI.updateProfile(data);
   
   // 2. Queue for sync (non-blocking)
-  syncManager.sync('auth', {
-    action: 'updateProfile',
-    data
-  }).catch(err => console.warn('Sync queue failed:', err));
+  try {
+    const syncManager = getSyncManager();
+    await syncManager.sync('auth', {
+      action: 'updateProfile',
+      data
+    });
+  } catch (err) {
+    console.warn('Sync queue failed:', err);
+  }
   
   return result; // Return local result immediately
 }
@@ -527,9 +671,11 @@ class AnalyticsSyncStrategy implements SyncStrategy {
 ```
 
 **Priority Guide:**
-- **1-2**: Critical (auth, payments)
-- **3**: Normal (user data, meals)
-- **4-5**: Low (analytics, logs)
+- **1**: Critical (auth, payments)
+- **2**: High (user data, meals)
+- **3**: Normal (photos, updates)
+- **4**: Low (feedback, logs)
+- **5**: Lowest (analytics)
 
 ---
 
@@ -538,7 +684,6 @@ class AnalyticsSyncStrategy implements SyncStrategy {
 ```typescript
 class MealSyncStrategy implements SyncStrategy {
   validate(data: any): boolean {
-    // Validate before queueing
     if (!data.items || data.items.length === 0) {
       console.error('Invalid meal data: no items');
       return false;
@@ -564,16 +709,16 @@ const [syncStatus, setSyncStatus] = useState(null);
 
 useEffect(() => {
   const checkSync = async () => {
+    const syncManager = getSyncManager();
     const status = await syncManager.getStatus();
-    const pendingAuth = await syncManager.getPendingCount('auth');
-    const pendingMeal = await syncManager.getPendingCount('meal');
     
     setSyncStatus({
       isOnline: status.isOnline,
       isSyncing: status.isProcessing,
-      pendingItems: status.queueStats.pending,
-      pendingAuth,
-      pendingMeal,
+      totalPending: status.queueStats.totalItems,
+      pendingAuth: status.queueStats.byType.auth || 0,
+      pendingMeal: status.queueStats.byType.meal || 0,
+      failedCount: status.queueStats.failedItems,
     });
   };
   
@@ -583,18 +728,17 @@ useEffect(() => {
 }, []);
 
 // In UI
-{syncStatus?.pendingItems > 0 && (
-  <Badge count={syncStatus.pendingItems}>
-    {syncStatus.isSyncing ? 'Syncing...' : 'Pending sync'}
-  </Badge>
+{syncStatus?.totalPending > 0 && (
+  <View style={styles.badge}>
+    <Text>{syncStatus.totalPending} pending</Text>
+    {syncStatus.isSyncing && <ActivityIndicator />}
+  </View>
 )}
 ```
 
 ---
 
 ### 6. ✅ DO: Handle Network Changes
-
-SyncManager already handles this automatically, but you can add UI feedback:
 
 ```typescript
 useEffect(() => {
@@ -608,6 +752,24 @@ useEffect(() => {
   });
   
   return () => unsubscribe();
+}, []);
+```
+
+---
+
+### 7. ✅ DO: Regular Cleanup
+
+```typescript
+// Run daily
+useEffect(() => {
+  const cleanup = async () => {
+    const syncManager = getSyncManager();
+    const removed = await syncManager.removeFailed();
+    console.log(`Cleaned ${removed} failed items`);
+  };
+
+  const interval = setInterval(cleanup, 24 * 60 * 60 * 1000);
+  return () => clearInterval(interval);
 }, []);
 ```
 
@@ -634,7 +796,6 @@ class AuthService {
       });
       console.log('Profile update queued for sync');
     } catch (syncErr) {
-      // Non-blocking
       console.warn('Failed to queue sync:', syncErr);
     }
     
@@ -662,49 +823,54 @@ class AuthService {
 
 ---
 
-### Example 2: Meal Submission (from cartContext)
+### Example 2: Meal Submission with Offline Support
 
 ```typescript
-const submitAnalysis = async () => {
+const submitMeal = async (mealData: AnalyzeMealRequest) => {
   try {
-    // 1. Prepare data
-    const mealData = await MealOfflineAPI.prepareScanForSync();
-    
-    // 2. Calculate nutrition OFFLINE (instant result)
+    // 1. Calculate nutrition offline (instant)
     const nutrition = await MealOfflineAPI.calculateMealNutrition(
       mealData.items,
       mealData.ricePortion
     );
     
-    // 3. Create local scan (available immediately)
-    const localScan = {
+    // 2. Create local scan
+    const localScan: NutritionScan = {
       id: `local_${Date.now()}`,
+      localId: `local_${Date.now()}`,
       foodName: 'My Meal',
       calories: nutrition.calories,
       protein: nutrition.protein,
+      carbs: nutrition.carbs,
+      fat: nutrition.fat,
+      fiber: nutrition.fiber,
+      sugar: nutrition.sugar,
       // ... other fields
+      isSynced: false,
+      createdAt: new Date().toISOString(),
     };
     
-    // 4. Save to local history
+    // 3. Save to local history
     await MealOfflineAPI.saveCompletedScan(localScan);
     
-    // 5. Queue untuk sync (background)
+    // 4. Queue for sync (background)
     try {
       const syncManager = getSyncManager();
-      await syncManager.sync('meal', mealData);
+      await syncManager.sync('meal', {
+        action: 'submitAnalysis',
+        mealData,
+        localScanId: localScan.localId,
+      });
       console.log('Meal queued for server sync');
     } catch (syncErr) {
       console.warn('Failed to queue, will retry later:', syncErr);
-      // Local scan sudah tersimpan - user can see it
     }
     
-    // 6. Clear cart
-    await MealOfflineAPI.clearCart();
-    
+    // 5. Return immediately with local result
     return {
       success: true,
       scan: localScan,
-      message: 'Analisis berhasil (offline)',
+      message: 'Meal saved (will sync when online)',
     };
   } catch (err) {
     return {
@@ -717,54 +883,104 @@ const submitAnalysis = async () => {
 
 ---
 
-### Example 3: Sync Status Component
+### Example 3: Comprehensive Sync Status Display
 
 ```typescript
-function SyncStatusBadge() {
-  const [status, setStatus] = useState({
-    isOnline: false,
-    isSyncing: false,
-    pending: 0,
-  });
-  
+function DetailedSyncStatus() {
+  const [status, setStatus] = useState<GlobalSyncStatus | null>(null);
+
   useEffect(() => {
     const updateStatus = async () => {
       try {
         const syncManager = getSyncManager();
-        const globalStatus = await syncManager.getStatus();
-        
-        setStatus({
-          isOnline: globalStatus.isOnline,
-          isSyncing: globalStatus.isProcessing,
-          pending: globalStatus.queueStats.pending,
-        });
+        const currentStatus = await syncManager.getStatus();
+        setStatus(currentStatus);
       } catch (err) {
         console.error('Failed to get sync status:', err);
       }
     };
-    
+
     updateStatus();
     const interval = setInterval(updateStatus, 3000);
-    
     return () => clearInterval(interval);
   }, []);
-  
-  if (!status.isOnline && status.pending === 0) {
-    return null; // Nothing to show
-  }
-  
+
+  if (!status) return null;
+
+  const { queueStats } = status;
+
   return (
-    <View style={styles.badge}>
-      {!status.isOnline && (
-        <Icon name="wifi-off" />
+    <View style={styles.container}>
+      {/* Connection Status */}
+      <View style={styles.header}>
+        <View style={[styles.badge, { 
+          backgroundColor: status.isOnline ? '#10b981' : '#f59e0b' 
+        }]}>
+          <Text style={styles.badgeText}>
+            {status.isOnline ? '● Online' : '● Offline'}
+          </Text>
+        </View>
+        {status.isProcessing && (
+          <ActivityIndicator size="small" color="#10b981" />
+        )}
+      </View>
+
+      {/* Total Pending */}
+      {queueStats.totalItems > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.total}>
+            Total Pending: {queueStats.totalItems}
+          </Text>
+        </View>
       )}
-      
-      {status.isSyncing && (
-        <ActivityIndicator />
+
+      {/* By Type */}
+      {queueStats.totalItems > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>By Type:</Text>
+          {Object.entries(queueStats.byType)
+            .filter(([_, count]) => count > 0)
+            .map(([type, count]) => (
+              <View key={type} style={styles.row}>
+                <Text style={styles.label}>{type}:</Text>
+                <Text style={styles.value}>{count}</Text>
+              </View>
+            ))}
+        </View>
       )}
-      
-      {status.pending > 0 && (
-        <Text>{status.pending} pending</Text>
+
+      {/* By Priority */}
+      {queueStats.totalItems > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>By Priority:</Text>
+          {Object.entries(queueStats.byPriority)
+            .filter(([_, count]) => count > 0)
+            .map(([priority, count]) => (
+              <View key={priority} style={styles.row}>
+                <Text style={styles.label}>Priority {priority}:</Text>
+                <Text style={styles.value}>{count}</Text>
+              </View>
+            ))}
+        </View>
+      )}
+
+      {/* Failed Items */}
+      {queueStats.failedItems > 0 && (
+        <View style={[styles.section, styles.errorSection]}>
+          <Text style={styles.errorText}>
+            ⚠️ {queueStats.failedItems} failed items
+          </Text>
+          <Text style={styles.subtext}>
+            Avg retries: {queueStats.avgRetries.toFixed(1)}
+          </Text>
+        </View>
+      )}
+
+      {/* Last Sync Time */}
+      {status.lastSyncTime && (
+        <Text style={styles.timestamp}>
+          Last sync: {new Date(status.lastSyncTime).toLocaleTimeString()}
+        </Text>
       )}
     </View>
   );
@@ -773,39 +989,95 @@ function SyncStatusBadge() {
 
 ---
 
-### Example 4: Manual Sync Trigger
+### Example 4: Manual Sync with Progress
 
 ```typescript
 function SyncButton() {
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState('');
   
   const handleSync = async () => {
     setLoading(true);
+    setProgress('Starting sync...');
+    
     try {
       const syncManager = getSyncManager();
+      
+      // Get initial stats
+      const beforeStats = await syncManager.getStatus();
+      setProgress(`Syncing ${beforeStats.queueStats.totalItems} items...`);
+      
+      // Sync all
       const result = await syncManager.syncAll();
       
       if (result.success) {
-        showToast(`Synced ${result.processedCount} items successfully`);
+        setProgress(
+          `✓ Synced ${result.processedCount} items successfully`
+        );
+        setTimeout(() => setProgress(''), 3000);
       } else {
-        showToast(`Sync completed with ${result.failedCount} errors`);
+        setProgress(
+          `⚠ Completed with ${result.failedCount} errors`
+        );
       }
     } catch (err) {
-      showToast('Sync failed: ' + err.message);
+      setProgress(`✗ Sync failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
   
   return (
-    <Button 
-      onPress={handleSync} 
-      loading={loading}
-      disabled={loading}
-    >
-      {loading ? 'Syncing...' : 'Sync Now'}
-    </Button>
+    <View>
+      <Button 
+        onPress={handleSync} 
+        loading={loading}
+        disabled={loading}
+      >
+        {loading ? 'Syncing...' : 'Sync Now'}
+      </Button>
+      {progress && (
+        <Text style={styles.progress}>{progress}</Text>
+      )}
+    </View>
   );
+}
+```
+
+---
+
+### Example 5: Periodic Background Sync
+
+```typescript
+function useBackgroundSync() {
+  useEffect(() => {
+    const backgroundSync = async () => {
+      try {
+        const syncManager = getSyncManager();
+        const status = await syncManager.getStatus();
+        
+        // Only sync if online and has pending items
+        if (status.isOnline && status.queueStats.totalItems > 0) {
+          console.log('[BackgroundSync] Starting...');
+          const result = await syncManager.syncBatch(5); // Limit to 5 items
+          console.log(
+            `[BackgroundSync] Complete: ${result.processedCount} synced, ` +
+            `${result.failedCount} failed`
+          );
+        }
+      } catch (err) {
+        console.error('[BackgroundSync] Failed:', err);
+      }
+    };
+
+    // Run every 5 minutes
+    const interval = setInterval(backgroundSync, 5 * 60 * 1000);
+    
+    // Initial sync
+    backgroundSync();
+    
+    return () => clearInterval(interval);
+  }, []);
 }
 ```
 
@@ -816,7 +1088,7 @@ function SyncButton() {
 ### Step 1: Create Sync Strategy
 
 ```typescript
-// authSyncStrategy.ts
+// strategies/authSyncStrategy.ts
 import { SyncStrategy, SyncPayload } from '@/services/sync/syncManager';
 import authOnlineAPI from '@/services/auth/authOnlineAPI';
 import authOfflineAPI from '@/services/auth/authOfflineAPI';
@@ -824,16 +1096,13 @@ import authOfflineAPI from '@/services/auth/authOfflineAPI';
 class AuthSyncStrategy implements SyncStrategy {
   async prepare(data: any): Promise<SyncPayload> {
     return {
-      id: `auth_${Date.now()}`,
+      id: `auth_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type: 'auth',
       data,
-      priority: 1, // High priority
-      retries: 0,
+      priority: 1,
+      retryCount: 0,
       maxRetries: 5,
-      status: 'pending',
       createdAt: new Date().toISOString(),
-      lastAttemptAt: null,
-      error: null,
     };
   }
 
@@ -855,12 +1124,6 @@ class AuthSyncStrategy implements SyncStrategy {
           token
         );
       
-      case 'deleteAccount':
-        return await authOnlineAPI.deleteAccount(userId, token);
-      
-      case 'logout':
-        return await authOnlineAPI.logout(token);
-      
       default:
         throw new Error(`Unknown auth action: ${action}`);
     }
@@ -869,12 +1132,10 @@ class AuthSyncStrategy implements SyncStrategy {
   async onSuccess(result: any, payload: SyncPayload): Promise<void> {
     console.log(`[AuthSync] ✓ Success: ${payload.data.action}`);
     
-    // Update local data dengan server response
     if (result.user) {
       await authOfflineAPI.saveUserFromServer(result.user);
     }
     
-    // Clear pending marker jika ada
     if (payload.data.userId) {
       await authOfflineAPI.clearPendingUpdate(payload.data.userId);
     }
@@ -883,8 +1144,7 @@ class AuthSyncStrategy implements SyncStrategy {
   async onFailure(error: Error, payload: SyncPayload): Promise<void> {
     console.error(`[AuthSync] ✗ Failed: ${payload.data.action}`, error);
     
-    // Mark as pending jika perlu retry
-    if (payload.data.userId && payload.retries < payload.maxRetries) {
+    if (payload.data.userId && payload.retryCount < payload.maxRetries) {
       await authOfflineAPI.markPendingUpdate(
         payload.data.userId,
         payload.data.userData
@@ -893,35 +1153,22 @@ class AuthSyncStrategy implements SyncStrategy {
   }
 
   validate(data: any): boolean {
-    if (!data.action) {
-      console.error('[AuthSync] Missing action');
-      return false;
-    }
+    if (!data.action) return false;
     
-    // Validate based on action
     switch (data.action) {
       case 'updateProfile':
         return !!(data.userId && data.userData && data.token);
-      
       case 'changePassword':
         return !!(data.userId && data.oldPassword && data.newPassword && data.token);
-      
-      case 'deleteAccount':
-        return !!(data.userId && data.token);
-      
-      case 'logout':
-        return !!data.token;
-      
       case 'register':
         return !!data.registerData;
-      
       default:
         return false;
     }
   }
 
   getPriority(): number {
-    return 1; // High priority
+    return 1;
   }
 
   getMaxRetries(): number {
@@ -934,56 +1181,97 @@ export default new AuthSyncStrategy();
 
 ---
 
-### Step 2: Register Strategy
+### Step 2: Initialize in App
 
 ```typescript
-// In app initialization (App.tsx or index.ts)
+// App.tsx or _layout.tsx
+import { useEffect, useState } from 'react';
 import { getSyncManager } from '@/services/sync/syncManager';
 import { getSyncQueue } from '@/services/sync/syncQueue';
 import authSyncStrategy from '@/services/sync/strategies/authSyncStrategy';
-import mealSyncStrategy from '@/services/sync/strategies/mealSyncStrategy';
+import { mealSyncStrategy } from '@/services/sync/strategies/mealSyncStrategy';
+import menuSyncStrategy from '@/services/sync/strategies/menuSyncStrategy';
 
-async function initializeSync() {
-  try {
-    // Get instances
-    const syncQueue = getSyncQueue();
-    const syncManager = getSyncManager(syncQueue);
-    
-    // Register strategies
-    syncManager.registerStrategy('auth', authSyncStrategy);
-    syncManager.registerStrategy('meal', mealSyncStrategy);
-    
-    console.log('Sync initialized successfully');
-  } catch (error) {
-    console.error('Failed to initialize sync:', error);
+function App() {
+  const [syncReady, setSyncReady] = useState(false);
+
+  useEffect(() => {
+    const initSync = async () => {
+      try {
+        console.log('[App] Initializing sync system...');
+
+        // Get instances
+        const syncQueue = getSyncQueue();
+        const syncManager = getSyncManager(syncQueue);
+
+        // Register strategies
+        syncManager.registerStrategy('auth', authSyncStrategy);
+        syncManager.registerStrategy('meal', mealSyncStrategy);
+        syncManager.registerStrategy('menu', menuSyncStrategy);
+
+        console.log('[App] ✓ Sync system ready');
+        setSyncReady(true);
+
+        // Initial sync if online
+        const status = await syncManager.getStatus();
+        if (status.isOnline && status.queueStats.totalItems > 0) {
+          console.log('[App] Starting initial sync...');
+          await syncManager.syncAll();
+        }
+      } catch (err) {
+        console.error('[App] Failed to initialize sync:', err);
+        setSyncReady(true); // Continue anyway
+      }
+    };
+
+    initSync();
+
+    return () => {
+      try {
+        const syncManager = getSyncManager();
+        syncManager.cleanup();
+      } catch (err) {}
+    };
+  }, []);
+
+  if (!syncReady) {
+    return <LoadingScreen />;
   }
-}
 
-// Call during app startup
-initializeSync();
+  return <MainApp />;
+}
 ```
 
 ---
 
-### Step 3: Use in Service
+### Step 3: Use in Services
 
 ```typescript
-// authService.ts
-async updateUser(userId: string, userData: UpdateUserRequest, token: string) {
-  // 1. Update locally
-  const authData = await authOfflineAPI.updateUser(userId, userData, token);
-  
-  // 2. Queue for sync
-  const syncManager = getSyncManager();
-  await syncManager.sync('auth', {
-    action: 'updateProfile',
-    userId,
-    userData,
-    token,
-  });
-  
-  // 3. Return local result
-  return authData;
+// services/authService.ts
+import { getSyncManager } from '@/services/sync/syncManager';
+import authOfflineAPI from './authOfflineAPI';
+
+class AuthService {
+  async updateUser(userId: string, userData: any, token: string) {
+    // 1. Update locally
+    const result = await authOfflineAPI.updateUser(userId, userData, token);
+    
+    // 2. Queue for sync
+    try {
+      const syncManager = getSyncManager();
+      await syncManager.sync('auth', {
+        action: 'updateProfile',
+        userId,
+        userData,
+        token,
+      });
+    } catch (err) {
+      console.warn('Failed to queue sync:', err);
+    }
+    
+    // 3. Return local result
+    return result;
+  }
 }
 ```
 
@@ -997,17 +1285,25 @@ async updateUser(userId: string, userData: UpdateUserRequest, token: string) {
 
 **Diagnosis:**
 ```typescript
+const syncManager = getSyncManager();
 const status = await syncManager.getStatus();
+
 console.log('Online:', status.isOnline);
 console.log('Processing:', status.isProcessing);
-console.log('Queue:', status.queueStats);
+console.log('Total items:', status.queueStats.totalItems);
+console.log('Failed items:', status.queueStats.failedItems);
+
+// Check specific type
+const authPending = await syncManager.getPendingCount('auth');
+console.log('Auth pending:', authPending);
 ```
 
 **Solutions:**
-- Check network connection
-- Check if strategy registered: `syncManager.hasStrategy('auth')`
-- Check if paused: `syncManager.resumeSync()`
-- Force sync: `syncManager.forceSync()`
+1. Check network: `status.isOnline`
+2. Check if strategy registered: `syncManager.hasStrategy('auth')`
+3. Check if paused: `syncManager.resumeSync()`
+4. Force sync: `await syncManager.forceSync()`
+5. Check for failed items: `status.queueStats.failedItems`
 
 ---
 
@@ -1017,16 +1313,30 @@ console.log('Queue:', status.queueStats);
 
 **Diagnosis:**
 ```typescript
+const syncManager = getSyncManager();
+const syncQueue = getSyncQueue();
+
+// Export diagnostics
 const diagnostics = await syncManager.exportDiagnostics();
-console.log(diagnostics);
+console.log(JSON.parse(diagnostics.queue));
+
+// Check oldest items
+const oldest = await syncQueue.getOldest();
+console.log('Oldest item:', oldest);
+
+// Check failed items
+const stats = await syncQueue.getStats();
+console.log('Failed count:', stats.failedItems);
+console.log('Avg retries:', stats.avgRetries);
 ```
 
 **Solutions:**
-- Check strategy validation: Is data valid?
-- Check server: Is API working?
-- Check token: Is it expired?
-- Increase max retries in strategy
-- Check error logs in onFailure()
+1. Check validation: Run `strategy.validate(data)`
+2. Check server: Test API endpoints directly
+3. Check token: May be expired
+4. Increase max retries in strategy
+5. Check error logs: Look at `payload.error`
+6. Clear failed: `await syncManager.removeFailed()`
 
 ---
 
@@ -1035,10 +1345,25 @@ console.log(diagnostics);
 **Symptoms:** App slow, high memory usage.
 
 **Solutions:**
-- Use batch sync: `syncManager.syncBatch(5)` instead of `syncAll()`
-- Clear failed items: `syncManager.removeFailed()`
-- Implement pagination in strategy
-- Reduce queue size regularly
+```typescript
+// Use batch sync instead of syncAll
+await syncManager.syncBatch(5);
+
+// Clear old items regularly
+const syncQueue = getSyncQueue();
+const old = await syncQueue.getOlderThan(24); // 24 hours
+console.log(`Found ${old.length} old items`);
+
+// Remove failed items
+const removed = await syncManager.removeFailed();
+console.log(`Removed ${removed} failed items`);
+
+// Reduce queue size
+if (stats.totalItems > 100) {
+  console.warn('Queue too large, clearing old items');
+  await syncQueue.clearOlderThan(48);
+}
+```
 
 ---
 
@@ -1047,10 +1372,31 @@ console.log(diagnostics);
 **Symptoms:** Same data synced multiple times.
 
 **Solutions:**
-- Check validation logic - prevent duplicate adds
-- Implement idempotency in server API
-- Clear queue after successful sync
-- Use unique IDs in prepare()
+1. Check validation prevents duplicates
+2. Use unique IDs in prepare()
+3. Implement idempotency in server API
+4. Clear queue after successful local save
+5. Check for race conditions in concurrent syncs
+
+---
+
+### Issue 5: Network Detection Not Working
+
+**Symptoms:** Doesn't auto-sync when coming back online.
+
+**Solutions:**
+```typescript
+// Manually test network listener
+import NetInfo from '@react-native-community/netinfo';
+
+NetInfo.addEventListener(state => {
+  console.log('Network state:', state.isConnected);
+});
+
+// Force sync manually
+const syncManager = getSyncManager();
+await syncManager.forceSync();
+```
 
 ---
 
@@ -1059,17 +1405,15 @@ console.log(diagnostics);
 ### 1. Batch Processing
 
 ```typescript
-// Instead of:
-for (const item of items) {
-  await syncManager.sync('meal', item);
-}
+// Instead of processing all at once
+await syncManager.syncAll(); // Can be slow
 
-// Use:
-const batch = items.map(item => ({ type: 'meal', data: item }));
-for (const item of batch) {
-  syncManager.sync(item.type, item.data);
+// Use batches
+while (true) {
+  const result = await syncManager.syncBatch(5);
+  if (result.processedCount === 0) break;
+  await sleep(1000); // Rate limiting
 }
-await syncManager.syncBatch(10);
 ```
 
 ---
@@ -1077,25 +1421,30 @@ await syncManager.syncBatch(10);
 ### 2. Priority Management
 
 ```typescript
-// High priority items sync first
-class CriticalSyncStrategy implements SyncStrategy {
-  getPriority(): number {
-    return 1; // Will be processed before priority 2-5
-  }
-}
+// Sync high priority first
+await syncManager.syncType('auth'); // Priority 1
+
+// Then normal priority
+await syncManager.syncType('meal'); // Priority 2
+
+// Finally low priority
+await syncManager.syncType('analytics'); // Priority 5
 ```
 
 ---
 
-### 3. Network-Aware Syncing
+### 3. Smart Sync Timing
 
 ```typescript
-const status = await syncManager.getStatus();
+// Sync during idle time
+import { AppState } from 'react-native';
 
-if (status.isOnline && !status.isProcessing) {
-  // Good time to sync
-  await syncManager.syncBatch(5);
-}
+AppState.addEventListener('change', async (nextAppState) => {
+  if (nextAppState === 'background') {
+    // App going to background, sync now
+    await syncManager.syncBatch(3);
+  }
+});
 ```
 
 ---
@@ -1103,10 +1452,19 @@ if (status.isOnline && !status.isProcessing) {
 ### 4. Periodic Cleanup
 
 ```typescript
-// Run daily
+// Daily cleanup
 setInterval(async () => {
-  const removed = await syncManager.removeFailed();
-  console.log(`Cleaned ${removed} failed items`);
+  const syncManager = getSyncManager();
+  const syncQueue = getSyncQueue();
+  
+  // Remove failed items
+  await syncManager.removeFailed();
+  
+  // Clear old items (7 days)
+  const old = await syncQueue.getOlderThan(7 * 24);
+  for (const item of old) {
+    await syncQueue.remove(item.id);
+  }
 }, 24 * 60 * 60 * 1000);
 ```
 
@@ -1116,16 +1474,18 @@ setInterval(async () => {
 
 ### ✅ When to Use SyncManager
 
-1. **Any background sync operation**
-2. **Offline-first data updates**
-3. **Network-dependent operations**
-4. **Retry-able operations**
+1. Background sync operations
+2. Offline-first data updates
+3. Network-dependent operations
+4. Retry-able operations
+5. Priority-based sync
 
 ### ❌ When NOT to Use SyncManager
 
-1. **Read operations** (use offline API directly)
-2. **Real-time operations** (use WebSocket)
-3. **One-time critical operations** (use direct API call)
+1. Read operations (use offline API directly)
+2. Real-time operations (use WebSocket)
+3. One-time critical operations (use direct API)
+4. Simple operations without retry needs
 
 ### 🎯 Golden Rules
 
@@ -1134,18 +1494,22 @@ setInterval(async () => {
 3. **Validate early** - Check data before adding to queue
 4. **Handle failures** - Implement proper error handling
 5. **Monitor status** - Show sync status to users
+6. **Regular cleanup** - Remove old/failed items periodically
+7. **Use priorities** - Critical data gets synced first
+8. **Batch wisely** - Don't process too many at once
 
 ---
 
-## 🔗 Related Documentation
+## 🔗 Related Files
 
-- SyncQueue API
-- Strategy Pattern
-- Offline-First Architecture
-- Network Detection Guide
+- `syncManager.ts` - Main sync engine
+- `syncQueue.ts` - Queue management
+- `authSyncStrategy.ts` - Auth sync implementation
+- `mealSyncStrategy.ts` - Meal sync implementation
+- `menuSyncStrategy.ts` - Menu sync implementation
 
 ---
 
-**Version:** 1.0  
+**Version:** 2.0 (Corrected)  
 **Last Updated:** January 2025  
 **Maintainer:** Engineering Team

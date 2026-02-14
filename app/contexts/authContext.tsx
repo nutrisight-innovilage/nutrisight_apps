@@ -271,7 +271,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Load user on mount
   useEffect(() => {
     loadUser();
-  }, [loadUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Context Value

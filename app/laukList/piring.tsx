@@ -40,11 +40,13 @@ const PiringPage = () => {
   const [isPending, startTransition] = useTransition();
 
   // ---------- Fetch menu jika belum ada ----------
+  // FIXED: Removed fetchMenu from dependency array
   useEffect(() => {
     if (menuData.length === 0 && !menuLoading && !menuError) {
       fetchMenu();
     }
-  }, [menuData.length, menuLoading, menuError, fetchMenu]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuData.length, menuLoading, menuError]); // ✅ fetchMenu removed - it's stable from context
 
   // ---------- Gabung cart + menuData → CartDisplayItem[] ----------
   const cartItems = useMemo(() => {
@@ -154,24 +156,8 @@ const PiringPage = () => {
           onPress: async () => {
             try {
               const result = await submitAnalysis();
-
-              if (result.success) {
-                Alert.alert(
-                  'Berhasil! 🎉',
-                  result.message,
-                  [
-                    {
-                      text: 'OK',
-                      onPress: () => {
-                        // Navigate ke home tab untuk melihat hasil
-                        router.push('/(tabs)');
-                      },
-                    },
-                  ]
-                );
-              } else {
-                Alert.alert('Gagal', result.message);
-              }
+              router.push('/(tabs)');
+              
             } catch (err) {
               Alert.alert('Error', 'Gagal memproses analisis');
               console.error('[PiringPage] Submit analysis error:', err);

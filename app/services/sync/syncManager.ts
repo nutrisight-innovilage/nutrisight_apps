@@ -8,7 +8,7 @@
  * • Strategy-based sync untuk extensibility
  * • Automatic retry dengan exponential backoff
  * • Priority queue management
- * • Network detection
+ * • Network detectiona
  * • Batch processing
  * • Global sync status
  * ---------------------------------------------------------------------------

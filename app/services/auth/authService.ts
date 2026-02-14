@@ -118,7 +118,7 @@ class AuthService {
       console.error('[AuthService] Registration failed:', error);
       throw error;
     }
-  }
+  };
 
   /**
    * ✅ REFACTORED: Login user

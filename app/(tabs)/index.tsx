@@ -12,7 +12,7 @@ import {
 import { useCart } from '@/app/contexts/cartContext';
 import FoodHistoryCard from '@/app/components/foodHistoryCard';
 import WeeklyInsightCard from '@/app/components/weeklyInsightCard';
-import AddFoodModal from '@/app/components/addFoodModal';
+
 import LoadingScreen from '@/app/components/loadingScreen';
 
 export default function Index() {
@@ -24,7 +24,6 @@ export default function Index() {
     lastSubmittedScan
   } = useCart();
   
-  const [modalVisible, setModalVisible] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
   // Load data dari context saat component mount
@@ -44,20 +43,7 @@ export default function Index() {
     }
   };
 
-  const handleAddScan = async (scanData: Omit<NutritionScan, 'id'>) => {
-    try {
-      // Untuk sementara, karena context belum punya createScan,
-      // kita bisa tambahkan fungsi ini ke context atau gunakan API langsung
-      // Sementara ini akan di-handle oleh modal atau komponen lain
-      
-      Alert.alert('Info', 'Fitur tambah manual sedang dalam pengembangan. Gunakan fitur scan dari tab lain.');
-      setModalVisible(false);
-    } catch (error) {
-      console.error('Error adding scan:', error);
-      Alert.alert('Error', 'Gagal menambahkan data');
-    }
-  };
-
+  
   const handleDeleteScan = async (id: string) => {
     Alert.alert(
       'Hapus Data',
@@ -319,30 +305,7 @@ export default function Index() {
         </View>
       </ScrollView>
 
-      {/* Floating Add Button */}
-      <View className="absolute bottom-6 right-6">
-        <Pressable onPress={() => setModalVisible(true)}>
-          <View 
-            className="w-16 h-16 bg-primary rounded-full items-center justify-center"
-            style={{
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.3,
-              shadowRadius: 8,
-              elevation: 8,
-            }}
-          >
-            <Feather name="plus" size={28} color="white" />
-          </View>
-        </Pressable>
-      </View>
-
-      {/* Add Food Modal */}
-      <AddFoodModal 
-        visible={modalVisible}
-        onClose={() => setModalVisible(false)}
-        onSubmit={handleAddScan}
-      />
+      
     </View>
   );
 }

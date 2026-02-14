@@ -1,74 +1,76 @@
 {
   "expo": {
-    "name": "first",
-    "slug": "first",
+    "name": "YourAppName",
+    "slug": "your-app-name",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "first",
-    "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.yourapp",
       "infoPlist": {
-        "NSCameraUsageDescription": "Aplikasi ini membutuhkan akses kamera untuk memindai makanan.",
-        "NSPhotoLibraryUsageDescription": "Aplikasi ini membutuhkan akses galeri untuk memilih foto makanan."
+        "NSCameraUsageDescription": "Aplikasi ini memerlukan akses kamera untuk mengambil foto.",
+        "NSMicrophoneUsageDescription": "Aplikasi ini memerlukan akses mikrofon untuk merekam video.",
+        "NSPhotoLibraryUsageDescription": "Aplikasi ini memerlukan akses galeri untuk memilih foto.",
+        "NSPhotoLibraryAddUsageDescription": "Aplikasi ini memerlukan akses untuk menyimpan foto ke galeri.",
+        "NSUserTrackingUsageDescription": "Data ini digunakan untuk memberikan pengalaman yang lebih baik."
       }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
       },
-      "package": "com.innovillage.nutrisight",
+      "package": "com.yourcompany.yourapp",
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
-        "READ_MEDIA_IMAGES"
-      ],
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "NOTIFICATIONS",
+        "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "ACCESS_NETWORK_STATE",
+        "INTERNET"
+      ]
     },
     "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
-          "dark": {
-            "backgroundColor": "#000000"
-          }
-        }
-      ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Izinkan $(PRODUCT_NAME) mengakses kamera untuk mengambil foto makanan.",
-          "microphonePermission": "Izinkan $(PRODUCT_NAME) mengakses mikrofon (opsional).",
-          "recordAudioAndroid": false
+          "cameraPermission": "Izinkan $(PRODUCT_NAME) mengakses kamera Anda",
+          "microphonePermission": "Izinkan $(PRODUCT_NAME) mengakses mikrofon Anda",
+          "recordAudioAndroid": true
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Izinkan $(PRODUCT_NAME) mengakses galeri foto untuk memilih gambar makanan."
+          "photosPermission": "Aplikasi memerlukan akses ke foto Anda.",
+          "cameraPermission": "Aplikasi memerlukan akses ke kamera Anda."
         }
       ],
-      "expo-font"
-    ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    }
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ]
+    ]
   }
 }

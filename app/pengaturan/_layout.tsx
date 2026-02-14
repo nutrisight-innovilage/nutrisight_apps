@@ -25,7 +25,10 @@ export default function PengaturanLayout() {
     name="informasiPrivasi"
     options={{ title: 'Informasi Privasi', headerShown: false }}
     />
-
+    <Stack.Screen
+    name='syncStatusPage'
+    options={{ title: 'Status Sinkronisasi', headerShown: false }}
+    />
     </Stack>
   );
 }

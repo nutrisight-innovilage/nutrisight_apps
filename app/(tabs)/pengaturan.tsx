@@ -95,6 +95,18 @@ export default function SettingsPage() {
       ],
     },
     {
+      title: 'Sinkronisasi',
+      items: [
+        {
+          iconLib: 'Ionicons',
+          iconName: 'sync-outline',
+          label: 'Status Sinkronisasi',
+          description: 'Lihat status sinkronisasi data Anda',
+          onPress: () => handleToPage('syncStatusPage'),
+        },
+      ],
+    },
+    {
       title: 'Tentang',
       items: [
         {

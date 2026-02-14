@@ -298,17 +298,17 @@ class MenuService {
       
       // Queue menu sync - SyncManager will handle when to actually sync
       syncManager.sync('menu', {
-        action: 'syncMenu',
-        forceRefresh: false,
-        syncInterval: this.config.syncInterval,
-      }).catch(error => {
+  type: 'cache_update',
+  forceRefresh: false,
+  silent: true,
+}).catch(error => {
         // Non-blocking - will retry via SyncManager
         console.warn('[MenuService] Failed to queue sync, will retry later:', error);
       });
       
       console.log('[MenuService] 📋 Menu sync queued');
     } catch (error) {
-      console.error('[MenuService] Failed to queue background sync:', error);
+      console.warn('[MenuService] Failed to queue background sync:', error);
     }
   }
 
@@ -334,11 +334,10 @@ class MenuService {
 
       // Queue for sync and wait for result
       await syncManager.sync('menu', {
-        action: 'syncMenu',
-        forceRefresh,
-        syncInterval: this.config.syncInterval,
-      });
-
+  type: forceRefresh ? 'full_sync' : 'cache_update',
+  forceRefresh,
+  silent: false,
+});
       // Trigger immediate sync (user-initiated)
       const result = await syncManager.syncType('menu');
 
@@ -368,11 +367,10 @@ class MenuService {
       // Queue force refresh
       const syncManager = getSyncManager();
       await syncManager.sync('menu', {
-        action: 'syncMenu',
-        forceRefresh: true,
-        syncInterval: this.config.syncInterval,
-      });
-
+  type: 'full_sync',
+  forceRefresh: true,
+  silent: false,
+});
       // Trigger immediate sync
       const result = await syncManager.syncType('menu');
 

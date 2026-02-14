@@ -38,6 +38,7 @@ export default function CardScreen() {
   const { getFoodDetail, getCachedFoodDetail } = useMenu();
 
   // ==================== DATA LOADING ====================
+  // FIXED: Removed getFoodDetail and getCachedFoodDetail from dependencies
   useEffect(() => {
     const loadFoodDetail = async () => {
       if (!id) {
@@ -74,7 +75,8 @@ export default function CardScreen() {
     };
 
     loadFoodDetail();
-  }, [id, getFoodDetail, getCachedFoodDetail]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]); // ✅ Only id dependency - functions are stable from context
 
   // ==================== ANIMATED STYLES ====================
   const arrowRotation = useAnimatedStyle(() => {
