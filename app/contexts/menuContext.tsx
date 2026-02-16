@@ -1,13 +1,9 @@
 /**
- * menuContext.tsx
+ * menuContext.tsx (FIXED - Auto-detect mock data and sync)
  * ---------------------------------------------------------------------------
- * Slim context wrapper untuk menu data.
- * Business logic ada di menuService.
- * 
- * Context hanya:
- * • Menyimpan state
- * • Provide data ke children
- * • Wrapper untuk service calls
+ * ✅ PASTI mendeteksi mock data (id: '1'-'5')
+ * ✅ PASTI sync jika online
+ * ✅ PASTI refresh UI setelah sync
  * ---------------------------------------------------------------------------
  */
 
@@ -215,7 +211,7 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
     try {
       const success = await menuService.syncMenu(forceRefresh);
       
-      // Refresh menu data after successful sync
+      // ✅ PASTI refresh menu data setelah sync berhasil
       if (success) {
         await fetchMenu();
       }
@@ -240,14 +236,65 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Lifecycle
+  // Lifecycle - Smart initialization with mock detection
   // ---------------------------------------------------------------------------
 
-  // Initial load - FIXED: Removed fetchMenu from dependency array
   useEffect(() => {
-    fetchMenu();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // ✅ Only run once on mount
+    const initializeMenu = async () => {
+      console.log('[MenuContext] 🚀 Initializing menu...');
+      
+      // STEP 1: Fetch data (bisa mock atau cached real data)
+      await fetchMenu();
+      
+      // Wait for state to update
+      await new Promise(resolve => setTimeout(resolve, 100));
+    };
+    
+    initializeMenu();
+  }, [fetchMenu]);
+
+  // ✅ SEPARATE EFFECT: Detect mock data setelah menuData ter-update
+  useEffect(() => {
+    // Skip jika masih loading atau tidak ada data
+    if (isLoading || menuData.length === 0) {
+      return;
+    }
+
+    const checkAndSyncIfMock = async () => {
+      // STEP 2: Check if we got mock data
+      // Mock data PASTI punya id '1', '2', '3', '4', '5'
+      const isMockData = 
+        menuData.length === 5 && 
+        menuData.every(item => ['1', '2', '3', '4', '5'].includes(item.id));
+      
+      if (isMockData) {
+        console.log('[MenuContext] 🔍 Mock data detected (5 items with ids 1-5)');
+        
+        // STEP 3: Check if online
+        const cacheInfo = await getCacheInfo();
+        
+        if (cacheInfo?.isOnline) {
+          console.log('[MenuContext] 📡 Online detected → Syncing from Appwrite...');
+          
+          // STEP 4: Force sync from Appwrite (BLOCKING, wait for completion)
+          const syncSuccess = await syncMenu(true); // forceRefresh = true
+          
+          if (syncSuccess) {
+            console.log('[MenuContext] ✅ Sync completed successfully');
+            console.log('[MenuContext] 🎉 Real data loaded:', menuData.length, 'items');
+          } else {
+            console.warn('[MenuContext] ⚠️ Sync failed, keeping mock data');
+          }
+        } else {
+          console.log('[MenuContext] 📴 Offline, keeping mock data for now');
+        }
+      } else {
+        console.log('[MenuContext] ✅ Real data already loaded:', menuData.length, 'items');
+      }
+    };
+
+    checkAndSyncIfMock();
+  }, [menuData, isLoading]); // Run when menuData updates
 
   // ---------------------------------------------------------------------------
   // Context Value

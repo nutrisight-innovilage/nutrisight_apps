@@ -1,5 +1,5 @@
 /**
- * mealService.ts (FIXED - SyncManager Integration + Complete Offline Support)
+ * mealService.ts (FIXED - SyncManager Integration + Complete Offline Support) v1
  * ---------------------------------------------------------------------------
  * TRUE OFFLINE-FIRST - STRICTLY following meal.ts types.
  * 
@@ -758,16 +758,7 @@ class MealService {
   /**
    * Get sync diagnostics
    */
-  async getSyncDiagnostics(): Promise<any> {
-    try {
-      const syncManager = getSyncManager();
-      return await syncManager.exportDiagnostics();
-    } catch (error) {
-      console.error('[MealService] Failed to get diagnostics:', error);
-      return null;
-    }
-  }
-
+ 
   /**
    * Pause sync
    */
@@ -828,6 +819,162 @@ class MealService {
     MealOfflineAPI.clearCache();
     console.log('[MealService] Cache cleared');
   }
+
+/**
+ * Sync historical data to server
+ */
+async syncHistoricalData(options?: {
+  maxScans?: number;
+  startDate?: string;
+  endDate?: string;
+}): Promise<{
+  success: boolean;
+  syncedCount: number;
+  failedCount: number;
+  message: string;
+}> {
+  try {
+    const isOnline = await this.checkNetwork();
+    if (!isOnline) {
+      return {
+        success: false,
+        syncedCount: 0,
+        failedCount: 0,
+        message: 'Device is offline - cannot sync',
+      };
+    }
+
+    let scans = await MealOfflineAPI.getUnsyncedScans(options?.maxScans);
+    
+    if (options?.startDate && options?.endDate) {
+      scans = await MealOfflineAPI.getScansByDateRange(
+        options.startDate,
+        options.endDate
+      );
+      scans = scans.filter(s => !s.isSynced);
+    }
+    
+    if (scans.length === 0) {
+      return {
+        success: true,
+        syncedCount: 0,
+        failedCount: 0,
+        message: 'No scans to sync',
+      };
+    }
+
+    console.log(`[MealService] Starting historical sync of ${scans.length} scans...`);
+
+    const syncManager = getSyncManager();
+    await syncManager.sync('meal', {
+      action: 'sendHistoricalData',
+      scans: scans,
+    });
+
+    return {
+      success: true,
+      syncedCount: 0,
+      failedCount: 0,
+      message: `Syncing ${scans.length} scans in background...`,
+    };
+  } catch (error) {
+    console.error('[MealService] Historical sync failed:', error);
+    return {
+      success: false,
+      syncedCount: 0,
+      failedCount: 0,
+      message: error instanceof Error ? error.message : 'Sync failed',
+    };
+  }
+}
+
+/**
+ * Get historical sync status
+ */
+async getHistoricalSyncStatus(): Promise<{
+  totalScans: number;
+  unsyncedScans: number;
+  lastSyncTime: string | null;
+  canSync: boolean;
+}> {
+  try {
+    const status = await MealOfflineAPI.getHistoricalSyncStatus();
+    const isOnline = await this.checkNetwork();
+    
+    return {
+      totalScans: status.totalScans,
+      unsyncedScans: status.unsyncedScans,
+      lastSyncTime: status.lastSyncTime,
+      canSync: isOnline && status.unsyncedScans > 0,
+    };
+  } catch (error) {
+    console.error('[MealService] Failed to get historical sync status:', error);
+    return {
+      totalScans: 0,
+      unsyncedScans: 0,
+      lastSyncTime: null,
+      canSync: false,
+    };
+  }
+}
+
+/**
+ * Get comprehensive sync diagnostics
+ */
+async getSyncDiagnostics(): Promise<any> {
+  try {
+    const offlineDiagnostics = await MealOfflineAPI.getSyncDiagnostics();
+    const syncManager = getSyncManager();
+    const syncManagerStatus = await syncManager.getStatus();
+    
+    return {
+      offline: offlineDiagnostics,
+      syncManager: {
+        isOnline: syncManagerStatus.isOnline,
+        isProcessing: syncManagerStatus.isProcessing,
+        queueStats: syncManagerStatus.queueStats,
+      },
+      summary: {
+        totalScans: offlineDiagnostics.totalScans,
+        syncedScans: offlineDiagnostics.syncedScans,
+        unsyncedScans: offlineDiagnostics.unsyncedScans,
+        pendingInQueue: syncManagerStatus.queueStats.byType.meal || 0,
+        healthStatus: 
+          offlineDiagnostics.unsyncedScans > 50 ? 'critical' : 
+          offlineDiagnostics.unsyncedScans > 10 ? 'warning' : 'healthy',
+      },
+    };
+  } catch (error) {
+    console.error('[MealService] Failed to get sync diagnostics:', error);
+    return null;
+  }
+}
+
+/**
+ * Cleanup old synced scans
+ */
+async cleanupOldSyncedScans(daysOld: number = 30): Promise<{
+  success: boolean;
+  removedCount: number;
+  message: string;
+}> {
+  try {
+    const removedCount = await MealOfflineAPI.clearOldSyncedScans(daysOld);
+    
+    return {
+      success: true,
+      removedCount,
+      message: `Removed ${removedCount} old synced scans`,
+    };
+  } catch (error) {
+    console.error('[MealService] Cleanup failed:', error);
+    return {
+      success: false,
+      removedCount: 0,
+      message: error instanceof Error ? error.message : 'Cleanup failed',
+    };
+  }
+}
 }
 
 // ---------------------------------------------------------------------------

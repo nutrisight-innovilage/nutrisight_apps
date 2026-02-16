@@ -1,15 +1,14 @@
 /**
- * cameraService.ts (FIXED - Offline-First Photo Analysis)
+ * cameraService.ts (v2.0 - FULLY INTEGRATED)
  * ---------------------------------------------------------------------------
- * Camera service with proper offline-first architecture for photo analysis.
+ * Camera service with complete offline-first + PhotoUploadService + photoSyncStrategy.
  * 
- * FIXES APPLIED:
- * • ✅ Remove blocking online checks - let SyncManager handle it
- * • ✅ Save photo locally first (instant success)
- * • ✅ Queue for background analysis via SyncManager
- * • ✅ Return local placeholder scan immediately
- * • ✅ Non-blocking error handling
- * • ✅ Proper user feedback
+ * INTEGRATED FEATURES:
+ * ✅ Save photo locally first via PhotoUploadService (instant)
+ * ✅ Queue for AI analysis via photoSyncStrategy
+ * ✅ Return local placeholder scan immediately
+ * ✅ Non-blocking sync with SyncManager
+ * ✅ Proper error handling and user feedback
  * ---------------------------------------------------------------------------
  */
 
@@ -20,6 +19,7 @@ import NetInfo from '@react-native-community/netinfo';
 import type { CapturedPhoto, PhotoOptions, PickImageOptions } from '@/app/types/camera';
 import { getSyncManager } from '@/app/services/sync/syncManager';
 import { MealOfflineAPI } from '@/app/services/meal/mealOfflineAPI';
+import PhotoUploadService from '@/app/services/camera/photoUploadService';
 import { NutritionScan } from '@/app/types/meal';
 import authService from '@/app/services/auth/authService';
 
@@ -153,16 +153,19 @@ export class CameraService {
   }
 
   /**
-   * ✅ FIXED: Analyze food from photo - OFFLINE-FIRST
+   * ✅ FULLY INTEGRATED: Analyze food from photo
    * 
    * Flow:
-   * 1. Save photo locally (instant)
+   * 1. Save photo locally via PhotoUploadService (instant, works offline)
    * 2. Create local placeholder scan (instant feedback)
-   * 3. Queue for background AI analysis via SyncManager
+   * 3. Queue for background AI analysis via photoSyncStrategy
    * 4. Return local scan immediately
    * 
    * When online sync completes:
-   * - PhotoSyncStrategy.onSuccess() will update local scan with AI results
+   * - photoSyncStrategy.onSuccess() will:
+   *   a. Upload photo to Appwrite Storage
+   *   b. Call GPT-4 Vision via OpenRouter
+   *   c. Update local scan with AI results
    */
   static async analyzeFood(
     photoUri: string, 
@@ -173,10 +176,11 @@ export class CameraService {
   ): Promise<{
     success: boolean;
     scan?: NutritionScan;
+    localPhotoUri?: string;
     message: string;
   }> {
     try {
-      console.log('[CameraService] Starting food analysis...');
+      console.log('[CameraService] Starting food analysis flow...');
 
       // ========================================================================
       // STEP 1: Get user ID
@@ -192,11 +196,31 @@ export class CameraService {
       }
 
       // ========================================================================
-      // STEP 2: Create local placeholder scan (instant feedback)
+      // STEP 2: Save photo locally via PhotoUploadService (instant, offline-capable)
       // ========================================================================
       
+      console.log('[CameraService] Saving photo locally...');
+      
+      const saveResult = await PhotoUploadService.savePhotoLocally(photoUri);
+      
+      if (!saveResult.success || !saveResult.localUri) {
+        console.error('[CameraService] Failed to save photo locally:', saveResult.error);
+        return {
+          success: false,
+          message: saveResult.error || 'Gagal menyimpan foto lokal',
+        };
+      }
+
+      console.log('[CameraService] ✅ Photo saved locally:', saveResult.localUri);
+
+      // ========================================================================
+      // STEP 3: Create local placeholder scan (instant feedback)
+      // ========================================================================
+      
+      const localScanId = `photo_local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
       const localScan: NutritionScan = {
-        id: `photo_local_${Date.now()}`,
+        id: localScanId,
         userId,
         foodName: 'Analyzing...', // Will be updated after AI analysis
         date: new Date().toLocaleDateString('en-US', { 
@@ -215,7 +239,7 @@ export class CameraService {
       };
 
       // ========================================================================
-      // STEP 3: Save to local history
+      // STEP 4: Save placeholder scan to local storage
       // ========================================================================
       
       try {
@@ -230,16 +254,17 @@ export class CameraService {
       }
 
       // ========================================================================
-      // STEP 4: Queue for background AI analysis (non-blocking)
+      // STEP 5: Queue for background AI analysis via photoSyncStrategy (non-blocking)
       // ========================================================================
       
       try {
         const syncManager = getSyncManager();
         
+        // Queue photo for AI analysis
         await syncManager.sync('photo', {
           action: 'analyzePhoto',
-          photoUri,
-          localScanId: localScan.id,
+          photoUri: saveResult.localUri, // Use local photo URI
+          localScanId: localScanId,
           metadata: {
             userId,
             mealType: metadata?.mealType,
@@ -247,14 +272,14 @@ export class CameraService {
           },
         });
         
-        console.log('[CameraService] 📋 Photo analysis queued for background processing');
+        console.log('[CameraService] 📋 Photo queued for AI analysis via photoSyncStrategy');
       } catch (syncError) {
-        // Non-blocking error - local scan already saved
+        // Non-blocking error - local scan and photo already saved
         console.warn('[CameraService] Failed to queue for sync, will retry later:', syncError);
       }
 
       // ========================================================================
-      // STEP 5: Check network and inform user
+      // STEP 6: Check network and inform user
       // ========================================================================
       
       const online = await this.isOnline();
@@ -270,12 +295,13 @@ export class CameraService {
       );
 
       // ========================================================================
-      // STEP 6: Return local scan immediately (instant success)
+      // STEP 7: Return local scan immediately (instant success)
       // ========================================================================
       
       return {
         success: true,
         scan: localScan,
+        localPhotoUri: saveResult.localUri,
         message,
       };
 
@@ -290,7 +316,7 @@ export class CameraService {
   }
 
   /**
-   * ✅ NEW: Get analysis status
+   * ✅ Get analysis status
    * Check if photo analysis is complete or still pending
    */
   static async getAnalysisStatus(scanId: string): Promise<{
@@ -326,7 +352,7 @@ export class CameraService {
   }
 
   /**
-   * ✅ NEW: Retry failed photo analysis
+   * ✅ Retry failed photo analysis
    */
   static async retryPhotoAnalysis(scanId: string): Promise<boolean> {
     try {
@@ -364,7 +390,7 @@ export class CameraService {
   }
 
   /**
-   * ✅ NEW: Get pending photo analyses count
+   * ✅ Get pending photo analyses count
    */
   static async getPendingAnalysesCount(): Promise<number> {
     try {
@@ -372,6 +398,41 @@ export class CameraService {
       return await syncManager.getPendingCount('photo');
     } catch (error) {
       console.error('[CameraService] Error getting pending count:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * ✅ Clean up old local photos (optional maintenance)
+   */
+  static async cleanupOldPhotos(daysOld: number = 7): Promise<{
+    success: boolean;
+    deletedCount: number;
+  }> {
+    try {
+      const deletedCount = await PhotoUploadService.cleanupOldLocalPhotos(daysOld);
+      
+      return {
+        success: true,
+        deletedCount,
+      };
+    } catch (error) {
+      console.error('[CameraService] Error cleaning up photos:', error);
+      return {
+        success: false,
+        deletedCount: 0,
+      };
+    }
+  }
+
+  /**
+   * ✅ Get local photos storage size
+   */
+  static async getLocalPhotosSize(): Promise<number> {
+    try {
+      return await PhotoUploadService.getLocalPhotosSize();
+    } catch (error) {
+      console.error('[CameraService] Error getting photos size:', error);
       return 0;
     }
   }

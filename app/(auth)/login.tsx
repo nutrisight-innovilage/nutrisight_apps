@@ -4,11 +4,16 @@ import { Link, router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/app/contexts/authContext';
 
+
+
 export default function LoginScreen() {
+  
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const { login } = useAuth();
+     
+
 
     const handleLogin = async () => {
         if (!email || !password) {
@@ -36,6 +41,9 @@ export default function LoginScreen() {
                     <Text className="text-base text-text-secondary">Sign in to continue</Text>
                 </View>
                 
+     
+
+      
                 <View className="space-y-4">
                     <View>
                         <Text className="text-sm font-medium text-text-primary mb-2">Email</Text>

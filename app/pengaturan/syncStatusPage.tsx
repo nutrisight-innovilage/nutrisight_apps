@@ -38,6 +38,7 @@ import {
   InfoCard,
   EmptyState,
 } from '@/app/components/SyncStatusComponents';
+import LoadingScreen from '@/app/components/loadingScreen';
 
 // ============================================================================
 // Main Component
@@ -173,14 +174,7 @@ export default function SyncStatusScreen() {
   };
 
   if (loading) {
-    return (
-      <View className="flex-1 bg-background items-center justify-center">
-        <ActivityIndicator size="large" color="#37B37E" />
-        <Text className="mt-4 text-base text-text-secondary">
-          Loading sync status...
-        </Text>
-      </View>
-    );
+    return <LoadingScreen message="Loading sync status..." />
   }
 
   if (!status) {
@@ -227,7 +221,7 @@ export default function SyncStatusScreen() {
       }
     >
       {/* Header */}
-      <View className="px-6 pt-6 pb-4">
+      <View >
         <Animated.View entering={FadeInDown.duration(500)}>
           <CustomHeader 
             heading="Sync Status" 

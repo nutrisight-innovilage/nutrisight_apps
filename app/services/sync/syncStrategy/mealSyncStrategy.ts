@@ -1,22 +1,13 @@
 /**
- * mealSyncStrategy.ts (CLEANED - APPWRITE VERSION)
+ * mealSyncStrategy.ts (v2.0 COMPLETE)
  * ---------------------------------------------------------------------------
- * Meal-specific sync strategy - STRICTLY following mealService.ts usage.
+ * Meal-specific sync strategy with historical data sync support.
  * 
- * REMOVED BLOAT:
- * • ❌ sendHistoricalData action (not in mealService core flow)
- * • ❌ sendFeedback action (not in types)
- * • ❌ analyzePhoto action (not in types)
- * 
- * KEPT ONLY:
- * • ✅ submitAnalysis - Main meal submission (mealService.submitAnalysis)
- * • ✅ updateScan - Scan updates (mealService.updateScan)
- * • ✅ deleteScan - Scan deletion (mealService.deleteScan)
- * 
- * Flow:
- * 1. mealService.submitAnalysis() → sync('meal', { action: 'submitAnalysis', ... })
- * 2. mealService.updateScan() → sync('meal', { action: 'updateScan', ... })
- * 3. mealService.deleteScan() → sync('meal', { action: 'deleteScan', ... })
+ * ACTIONS:
+ * • ✅ submitAnalysis - Main meal submission
+ * • ✅ updateScan - Scan updates
+ * • ✅ deleteScan - Scan deletion
+ * • ✅ sendHistoricalData - Bulk historical sync (v2.0)
  * ---------------------------------------------------------------------------
  */
 
@@ -24,14 +15,14 @@ import { SyncPayload } from '@/app/services/sync/syncQueue';
 import { SyncStrategy } from '@/app/services/sync/syncManager';
 import { MealOfflineAPI } from '@/app/services/meal/mealOfflineAPI';
 import { MealOnlineAPI } from '@/app/services/meal/mealOnlineAPI';
-import { AnalyzeMealRequest, NutritionScan } from '@/app/types/meal';
+import { AnalyzeMealRequest, NutritionScan, BulkSyncResult } from '@/app/types/meal';
 
 // ---------------------------------------------------------------------------
 // Types for Sync Actions
 // ---------------------------------------------------------------------------
 
 interface MealSyncData {
-  action: 'submitAnalysis' | 'updateScan' | 'deleteScan';
+  action: 'submitAnalysis' | 'updateScan' | 'deleteScan' | 'sendHistoricalData';
   
   // submitAnalysis
   mealData?: AnalyzeMealRequest;
@@ -40,10 +31,15 @@ interface MealSyncData {
   // updateScan
   scanId?: string;
   updates?: Partial<NutritionScan>;
+  
+  // sendHistoricalData (v2.0)
+  scans?: any[];
+  batchIndex?: number;
+  totalBatches?: number;
 }
 
 // ---------------------------------------------------------------------------
-// Meal Sync Strategy (Cleaned)
+// Meal Sync Strategy (v2.0)
 // ---------------------------------------------------------------------------
 
 export class MealSyncStrategy implements SyncStrategy {
@@ -83,6 +79,9 @@ export class MealSyncStrategy implements SyncStrategy {
       case 'deleteScan':
         return await this.handleDeleteScan(data);
       
+      case 'sendHistoricalData':
+        return await this.handleSendHistoricalData(data);
+      
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -103,7 +102,6 @@ export class MealSyncStrategy implements SyncStrategy {
 
     console.log('[MealSync:SubmitAnalysis] Uploading meal for analysis...');
     
-    // Call MealOnlineAPI.analyzeMeal
     const response = await MealOnlineAPI.analyzeMeal(data.mealData);
     
     if (!response.success || !response.scan) {
@@ -148,6 +146,27 @@ export class MealSyncStrategy implements SyncStrategy {
     console.log('[MealSync:DeleteScan] ✅ Deletion complete');
   }
 
+  /**
+   * Handle: sendHistoricalData (v2.0)
+   * Bulk upload historical scans to server
+   */
+  private async handleSendHistoricalData(data: MealSyncData): Promise<BulkSyncResult> {
+    if (!data.scans || data.scans.length === 0) {
+      throw new Error('Missing scans for sendHistoricalData');
+    }
+
+    const batchIndex = data.batchIndex ?? 0;
+    const totalBatches = data.totalBatches ?? 1;
+
+    console.log(`[MealSync:SendHistoricalData] Uploading batch ${batchIndex + 1}/${totalBatches} (${data.scans.length} scans)...`);
+    
+    const result = await MealOnlineAPI.bulkUploadScans(data.scans);
+    
+    console.log(`[MealSync:SendHistoricalData] ✅ Batch complete: ${result.syncedCount} synced, ${result.failedCount} failed`);
+    
+    return result;
+  }
+
   // ===========================================================================
   // SUCCESS HANDLERS
   // ===========================================================================
@@ -173,6 +192,10 @@ export class MealSyncStrategy implements SyncStrategy {
       case 'deleteScan':
         await this.onDeleteScanSuccess(data);
         break;
+      
+      case 'sendHistoricalData':
+        await this.onSendHistoricalDataSuccess(result as BulkSyncResult, data);
+        break;
     }
   }
 
@@ -185,32 +208,26 @@ export class MealSyncStrategy implements SyncStrategy {
   ): Promise<void> {
     console.log('[MealSync:SubmitAnalysis] Processing success...');
 
-    // Update local scan dengan server result
     if (data.localScanId) {
       try {
         const localScan = await MealOfflineAPI.getLocalScanById(data.localScanId);
         
         if (localScan) {
-          // Update dengan server data
           await MealOfflineAPI.updateLocalScan(data.localScanId, {
             ...serverScan,
           });
           
-          // Mark as synced
           await MealOfflineAPI.markScanAsSynced(data.localScanId, serverScan.id);
           
           console.log('[MealSync:SubmitAnalysis] ✅ Local scan updated with server data');
         } else {
-          // Local scan tidak ditemukan, save server result
           await MealOfflineAPI.saveCompletedScan(serverScan);
           console.log('[MealSync:SubmitAnalysis] ✅ Server scan saved locally');
         }
       } catch (error) {
         console.error('[MealSync:SubmitAnalysis] Failed to update local scan:', error);
-        // Non-critical error, don't throw
       }
     } else {
-      // No local scan ID, just save server result
       await MealOfflineAPI.saveCompletedScan(serverScan);
       console.log('[MealSync:SubmitAnalysis] ✅ Server scan saved locally');
     }
@@ -223,7 +240,6 @@ export class MealSyncStrategy implements SyncStrategy {
     console.log('[MealSync:UpdateScan] ✅ Server updated successfully');
     
     if (data.scanId) {
-      // Mark local scan as synced
       const localScan = await MealOfflineAPI.getLocalScanById(data.scanId);
       if (localScan && !localScan.isSynced) {
         await MealOfflineAPI.markScanAsSynced(localScan.localId, data.scanId);
@@ -236,7 +252,35 @@ export class MealSyncStrategy implements SyncStrategy {
    */
   private async onDeleteScanSuccess(data: MealSyncData): Promise<void> {
     console.log('[MealSync:DeleteScan] ✅ Server deletion confirmed');
-    // Local scan already deleted by mealService
+  }
+
+  /**
+   * Success: sendHistoricalData (v2.0)
+   */
+  private async onSendHistoricalDataSuccess(
+    result: BulkSyncResult,
+    data: MealSyncData
+  ): Promise<void> {
+    console.log('[MealSync:SendHistoricalData] Processing success...');
+
+    // Mark successfully synced scans
+    const syncedPairs: Array<{ localId: string; serverId: string }> = [];
+    
+    for (const localId of result.syncedIds) {
+      syncedPairs.push({
+        localId,
+        serverId: `server_${localId}`, // Server will return proper IDs
+      });
+    }
+
+    if (syncedPairs.length > 0) {
+      await MealOfflineAPI.markBatchAsSynced(syncedPairs);
+      console.log(`[MealSync:SendHistoricalData] ✅ Marked ${syncedPairs.length} scans as synced`);
+    }
+
+    if (result.errors.length > 0) {
+      console.warn(`[MealSync:SendHistoricalData] ⚠️ ${result.errors.length} scans failed to sync`);
+    }
   }
 
   // ===========================================================================
@@ -263,6 +307,10 @@ export class MealSyncStrategy implements SyncStrategy {
       
       case 'deleteScan':
         await this.onDeleteScanFailure(error, data);
+        break;
+      
+      case 'sendHistoricalData':
+        await this.onSendHistoricalDataFailure(error, data);
         break;
     }
   }
@@ -291,6 +339,14 @@ export class MealSyncStrategy implements SyncStrategy {
     console.log('[MealSync:DeleteScan] Will retry on next sync');
   }
 
+  /**
+   * Failure: sendHistoricalData (v2.0)
+   */
+  private async onSendHistoricalDataFailure(error: Error, data: MealSyncData): Promise<void> {
+    console.error('[MealSync:SendHistoricalData] ❌ Bulk upload failed:', error.message);
+    console.log('[MealSync:SendHistoricalData] Will retry on next sync');
+  }
+
   // ===========================================================================
   // VALIDATION
   // ===========================================================================
@@ -316,6 +372,9 @@ export class MealSyncStrategy implements SyncStrategy {
       
       case 'deleteScan':
         return this.validateDeleteScan(mealData);
+      
+      case 'sendHistoricalData':
+        return this.validateSendHistoricalData(mealData);
       
       default:
         console.error(`[MealSync] Unknown action: ${action}`);
@@ -365,6 +424,20 @@ export class MealSyncStrategy implements SyncStrategy {
     return true;
   }
 
+  private validateSendHistoricalData(data: MealSyncData): boolean {
+    if (!data.scans || !Array.isArray(data.scans)) {
+      console.error('[MealSync:SendHistoricalData] Missing or invalid scans array');
+      return false;
+    }
+
+    if (data.scans.length === 0) {
+      console.error('[MealSync:SendHistoricalData] Empty scans array');
+      return false;
+    }
+
+    return true;
+  }
+
   // ===========================================================================
   // PRIORITY & RETRY CONFIGURATION
   // ===========================================================================
@@ -376,6 +449,9 @@ export class MealSyncStrategy implements SyncStrategy {
     switch (action) {
       case 'submitAnalysis':
         return 2; // Medium - important
+      
+      case 'sendHistoricalData':
+        return 3; // Low-medium - background task
       
       case 'updateScan':
         return 3; // Low-medium
@@ -395,6 +471,9 @@ export class MealSyncStrategy implements SyncStrategy {
     switch (action) {
       case 'submitAnalysis':
         return 3; // Standard retries
+      
+      case 'sendHistoricalData':
+        return 2; // Fewer retries for bulk operations
       
       case 'updateScan':
         return 3;

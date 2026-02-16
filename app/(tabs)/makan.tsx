@@ -19,7 +19,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { CameraFacing, CapturedPhoto } from '@/app/types/camera';
-import { CameraService } from '@/app/services/cameraAPI';
+import { CameraService } from '@/app/services/camera/cameraAPI';
 import LoadingScreen from '@/app/components/loadingScreen';
 
 export default function CameraPage() {

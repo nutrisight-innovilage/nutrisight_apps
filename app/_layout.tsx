@@ -2,7 +2,7 @@ import "./globals.css"
 import 'react-native-gesture-handler';
 import 'react-native-svg';
 import { Slot } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { View, Text } from 'react-native';
 import Animated, {
   FadeIn,
@@ -25,6 +25,7 @@ import { getSyncQueue } from '@/app/services/sync/syncQueue';
 import authSyncStrategy from '@/app/services/sync/syncStrategy/authSyncStrategy';
 import { mealSyncStrategy } from '@/app/services/sync/syncStrategy/mealSyncStrategy';
 import menuSyncStrategy from '@/app/services/sync/syncStrategy/menuSyncStrategy';
+import { photoSyncStrategy } from '@/app/services/sync/syncStrategy/photoSyncStrategy'; // ✅ NEW
 
 // ============================================================================
 // Sync Initialization Component
@@ -55,42 +56,58 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
       try {
         console.log('[App] Starting sync initialization...');
         setInitStatus({ step: 'Initializing sync queue...' });
-        progress.value = withSpring(0.3);
+        progress.value = withSpring(0.25);
 
         const syncQueue = getSyncQueue();
         await syncQueue.initialize();
         console.log('[App] ✓ SyncQueue initialized');
 
         setInitStatus({ step: 'Initializing sync manager...' });
-        progress.value = withSpring(0.6);
+        progress.value = withSpring(0.5);
 
         const syncManager = getSyncManager(syncQueue);
         console.log('[App] ✓ SyncManager initialized');
 
         setInitStatus({ step: 'Registering sync strategies...' });
-        progress.value = withSpring(0.8);
+        progress.value = withSpring(0.7);
 
+        // ✅ Register all sync strategies
         syncManager.registerStrategy('auth', authSyncStrategy);
         syncManager.registerStrategy('meal', mealSyncStrategy);
         syncManager.registerStrategy('menu', menuSyncStrategy);
-        console.log('[App] ✓ Registered all syncStrategy');
+        syncManager.registerStrategy('photo', photoSyncStrategy); // ✅ NEW: Photo sync strategy
+        
+        console.log('[App] ✓ Registered all sync strategies:', [
+          'auth',
+          'meal', 
+          'menu',
+          'photo', // ✅ NEW
+        ]);
 
         setInitStatus({ step: 'Checking queue...' });
-        progress.value = withSpring(0.9);
+        progress.value = withSpring(0.85);
 
         const status = await syncManager.getStatus();
         console.log('[App] Queue status:', {
           total: status.queueStats.totalItems,
+          pending: status.queueStats.totalItems - status.queueStats.failedItems,
           failed: status.queueStats.failedItems,
           online: status.isOnline,
         });
 
+        // Initial sync if online and has queued items
         if (status.isOnline && status.queueStats.totalItems > 0) {
-          setInitStatus({ step: `Syncing ${status.queueStats.totalItems} items...` });
+          setInitStatus({ 
+            step: `Syncing ${status.queueStats.totalItems} pending items...` 
+          });
+          
           const result = await syncManager.syncBatch(10);
-          console.log(
-            `[App] Initial sync: ${result.processedCount} synced, ${result.failedCount} failed`
-          );
+          
+          console.log('[App] Initial sync completed:', {
+            processed: result.processedCount,
+            succeeded: result.processedCount - result.failedCount,
+            failed: result.failedCount,
+          });
         }
 
         console.log('[App] ✓ Sync system ready');
@@ -106,6 +123,7 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
           error: error instanceof Error ? error.message : 'Unknown error' 
         });
         
+        // Continue anyway after 2s
         setTimeout(() => onReady(), 2000);
       }
     };
@@ -126,9 +144,10 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
       <View className="items-center">
         <Animated.View entering={FadeIn.duration(400)}>
           {/* Animated Spinner */}
-          <Animated.View style={spinnerStyle}>
-            <View className="w-16 h-16 rounded-full border-4 border-primary/20 border-t-primary" />
-          </Animated.View>
+          <Animated.View 
+            style={spinnerStyle}
+            className="w-16 h-16 rounded-full border-4 border-primary/20 border-t-primary" 
+          />
 
           {/* Progress Bar */}
           <View className="w-64 h-2 rounded-full mt-6 overflow-hidden bg-primary/20">
@@ -168,6 +187,11 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
 function AppContent() {
   const [syncReady, setSyncReady] = useState(false);
 
+  // ✅ Wrap onReady callback dengan useCallback agar stabil
+  const handleSyncReady = useCallback(() => {
+    setSyncReady(true);
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -182,7 +206,7 @@ function AppContent() {
   }, []);
 
   if (!syncReady) {
-    return <SyncInitializer onReady={() => setSyncReady(true)} />;
+    return <SyncInitializer onReady={handleSyncReady} />;
   }
 
   // Render child routes

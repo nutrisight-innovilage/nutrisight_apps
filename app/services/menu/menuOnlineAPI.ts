@@ -23,7 +23,7 @@ import {
   COLLECTIONS,
   QueryHelpers,
   handleAppwriteError,
-} from '@/app/services/appwriteConfig';
+} from '@/app/config/appwriteConfig';
 import { FoodItem, FoodItemDetail } from '@/app/types/food';
 import { Models } from 'appwrite';
 

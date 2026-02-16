@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useAuth } from '@/app/contexts/authContext';
+import LoadingScreen from '@/app/components/loadingScreen';
 
 export default function ProfilPage() {
   const { user, updateUser } = useAuth();
@@ -58,6 +59,9 @@ export default function ProfilPage() {
       setIsSaving(false);
     }
   };
+  if (isSaving) {
+    return <LoadingScreen message="Menyimpan profil..." />;
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-background">

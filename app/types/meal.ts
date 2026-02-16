@@ -1,15 +1,19 @@
 /**
- * meal.ts
+ * meal.ts (v2.0 COMPLETE)
  * ---------------------------------------------------------------------------
  * Unified types untuk meal input dan nutrition output.
- * Menghubungkan mealInputAPI (cart/meal creation) dengan mealOutputAPI (nutrition scans).
+ * 
+ * v2.0 Features:
+ * • ✅ Photo analysis types
+ * • ✅ Historical sync types
+ * • ✅ Bulk sync result types
  * ---------------------------------------------------------------------------
  */
 
 import { CartItem } from './food';
 
 // ---------------------------------------------------------------------------
-// Meal Input Types (dari mealInputAPI.ts)
+// Meal Input Types
 // ---------------------------------------------------------------------------
 
 /**
@@ -59,7 +63,7 @@ export const RICE_PORTIONS: RicePortion[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Meal Output Types (dari mealOutputAPI.ts)
+// Meal Output Types
 // ---------------------------------------------------------------------------
 
 /**
@@ -78,15 +82,139 @@ export interface NutritionScan {
   fats: number;
 }
 
-/**
- * Extended nutrition scan dengan meal metadata
- * Menghubungkan input (meal items) dengan output (nutrition result)
- */
-
+// ---------------------------------------------------------------------------
+// Photo Analysis Types (v2.0)
+// ---------------------------------------------------------------------------
 
 /**
- * Breakdown nutrisi per item makanan
+ * Status photo analysis
  */
+export type PhotoAnalysisStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/**
+ * Detected item dari AI
+ */
+export interface DetectedItem {
+  name: string;
+  confidence: number;        // 0-1
+  quantity: number;
+  estimatedGrams: number;
+}
+
+/**
+ * Photo analysis result
+ */
+export interface PhotoAnalysis {
+  id: string;
+  userId: string;
+  photoUrl: string;
+  localScanId?: string;
+  status: PhotoAnalysisStatus;
+  detectedItems?: DetectedItem[];
+  nutrition?: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fats: number;
+  };
+  uploadedAt: string;
+  analyzedAt?: string;
+  error?: string;
+}
+
+/**
+ * Photo analysis request
+ */
+export interface AnalyzePhotoRequest {
+  photoUri: string;
+  metadata?: {
+    mealType?: MealType;
+    notes?: string;
+  };
+}
+
+/**
+ * Photo analysis response
+ */
+export interface AnalyzePhotoResponse {
+  success: boolean;
+  scan?: NutritionScan;
+  photoAnalysisId?: string;
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Historical Sync Types (v2.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bulk sync result
+ */
+export interface BulkSyncResult {
+  success: boolean;
+  syncedCount: number;
+  failedCount: number;
+  syncedIds: string[];
+  errors: Array<{ localId: string; error: string }>;
+}
+
+/**
+ * Historical data sync progress
+ */
+export interface HistoricalSyncProgress {
+  totalBatches: number;
+  completedBatches: number;
+  totalScans: number;
+  syncedScans: number;
+  failedScans: number;
+  isComplete: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Pending Queue Types (v2.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pending scan yang belum ter-sync
+ */
+export interface PendingScan {
+  localId: string;
+  scanData: NutritionScan;
+  mealData: AnalyzeMealRequest;
+  createdAt: string;
+  attempts: number;
+  lastAttempt?: string;
+}
+
+/**
+ * Pending photo yang belum di-upload (v2.0)
+ */
+export interface PendingPhoto {
+  localId: string;
+  photoUri: string;
+  localScanId?: string;
+  metadata: {
+    mealType?: MealType;
+    notes?: string;
+    timestamp: string;
+    userId?: string;
+  };
+  attempts: number;
+  lastAttempt?: string;
+}
+
+/**
+ * Pending advice yang belum terkirim (v2.0)
+ */
+export interface PendingAdvice {
+  localId: string;
+  firstDate: string;
+  lastDate: string;
+  message: string;
+  createdAt: string;
+  attempts: number;
+  lastAttempt?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Analysis & Goals Types
@@ -129,7 +257,6 @@ export interface ChartDataPoint {
 
 /**
  * Request body untuk submit meal analysis
- * Dikirim dari mealInputAPI ke backend
  */
 export interface AnalyzeMealRequest {
   items: CartItem[];
@@ -181,10 +308,9 @@ export interface MealSummary {
   ricePortion: number;
   riceGrams: number;
   estimatedCalories?: number;
-  mealType?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+  mealType?: MealType;
   createdAt: string;
 }
-
 
 // ---------------------------------------------------------------------------
 // Utility Types
@@ -211,4 +337,4 @@ export interface DateRangeFilter {
 /**
  * Sorting options untuk scans
  */
-export type ScanSortOption = 'date-desc' | 'date-asc' | 'calories-desc' | 'calories-asc' | "manual-asc" | "manual-desc";
+export type ScanSortOption = 'date-desc' | 'date-asc' | 'calories-desc' | 'calories-asc' | 'manual-asc' | 'manual-desc';

@@ -19,7 +19,7 @@ import {
   generateId,
   handleAppwriteError,
   appwriteService,
-} from '@/app/services/appwriteConfig';
+} from '@/app/config/appwriteConfig';
 import { User, AuthResponse, LoginRequest, RegisterRequest, UpdateUserRequest } from '@/app/types/user';
 import { Models } from 'appwrite';
 

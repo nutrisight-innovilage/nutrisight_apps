@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # Welcome to your Expo app 👋
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
@@ -52,4 +52,4 @@ Join our community of developers creating universal apps.
 =======
 # nutrisight_apps
 nutrisight apps with react native / expo
->>>>>>> 7ab1c7e7bab5181d75a9e8e29335729061c07333
+

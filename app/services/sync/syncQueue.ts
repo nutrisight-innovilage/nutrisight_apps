@@ -1,5 +1,5 @@
 /**
- * syncQueue.ts
+ * syncQueue.ts v2
  * ---------------------------------------------------------------------------
  * Universal queue management untuk sync operations.
  * 
@@ -18,7 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Types
 // ---------------------------------------------------------------------------
 
-export type SyncType = 'meal' | 'photo' | 'feedback' | 'auth' | 'profile' | 'other' | 'menu';
+export type SyncType = 'meal' | 'photo' | 'advice' | 'auth' | 'profile' | 'other' | 'menu';
 
 export interface SyncPayload {
   id: string;
@@ -292,7 +292,7 @@ export class SyncQueue {
 
     const stats: QueueStats = {
       totalItems: this.queue.length,
-      byType: { meal: 0, photo: 0, feedback: 0, auth: 0, profile: 0, other: 0, menu: 0 },
+      byType: { meal: 0, photo: 0, advice: 0, auth: 0, profile: 0, other: 0, menu: 0 },
       byPriority: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
       failedItems: 0,
       avgRetries: 0,
