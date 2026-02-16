@@ -8,7 +8,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useCart } from '@/app/contexts/cartContext';
-import { FoodItem } from '@/app/types/food';
 import { RICE_PORTIONS } from '@/app/types/meal';
 import { mapCartToDisplayItems, calculateTotalItems } from '@/app/utils/cartUtils';
 import CustomHeader from '@/app/components/customHeader';

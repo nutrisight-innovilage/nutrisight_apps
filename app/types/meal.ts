@@ -54,12 +54,12 @@ export interface RicePortion {
 
 export const RICE_PORTIONS: RicePortion[] = [
   { value: 0, label: '0 Piring', grams: 0 },
-  { value: 0.25, label: '¼ Piring', grams: 50 },
-  { value: 0.5, label: '½ Piring', grams: 100 },
-  { value: 1, label: '1 Piring', grams: 200 },
-  { value: 1.5, label: '1½ Piring', grams: 300 },
-  { value: 2, label: '2 Piring', grams: 400 },
-  { value: 3, label: '>2 Piring', grams: 500 },
+  { value: 50, label: '¼ Piring', grams: 50 },
+  { value: 100, label: '½ Piring', grams: 100 },
+  { value: 200, label: '1 Piring', grams: 200 },
+  { value: 300, label: '1½ Piring', grams: 300 },
+  { value: 400, label: '2 Piring', grams: 400 },
+  { value: 500, label: '>2 Piring', grams: 500 },
 ];
 
 // ---------------------------------------------------------------------------

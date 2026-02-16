@@ -343,9 +343,11 @@ export const menuOnlineAPI = {
   /**
    * Sync local menu cache with server
    * Using incremental sync with timestamps
+   * 
+   * Karena ini offline-first architecture, cache lokal harus punya semua data yang mungkin dibutuhkan user saat offline. Kalau cuma simpan FoodItem (basic info), nanti saat user buka detail makanan pas offline, data nutrition/recipe-nya gak ada! Jadi kita simpan cache dengan struktur FoodItemDetail, biar lengkap. Sync-nya tetap incremental, tapi kita pastikan cache lokal selalu punya data detail yang lengkap.
    */
   syncMenuCache: async (lastSyncTime?: string): Promise<{
-    updated: FoodItem[];
+    updated: FoodItemDetail[];
     deleted: string[];
     timestamp: string;
   }> => {
@@ -367,7 +369,7 @@ export const menuOnlineAPI = {
         queries
       );
 
-      const updated = response.documents.map(convertToFoodItem);
+      const updated = response.documents.map(convertToFoodItemDetail);
 
       // Note: Appwrite doesn't have built-in "deleted items" tracking
       // You would need to implement this with a separate "deleted_items" collection

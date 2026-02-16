@@ -212,6 +212,7 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
       const success = await menuService.syncMenu(forceRefresh);
       
       // ✅ PASTI refresh menu data setelah sync berhasil
+      console.log(`[MenuContext] Sync ${success ? 'succeeded' : 'failed'}. Force refresh: ${forceRefresh}`);
       if (success) {
         await fetchMenu();
       }

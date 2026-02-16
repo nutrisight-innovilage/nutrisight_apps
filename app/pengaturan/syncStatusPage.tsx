@@ -73,7 +73,10 @@ export default function SyncStatusScreen() {
 
   // Manual sync
   const handleSync = async () => {
-    if (syncing) return;
+    if (syncing) {
+      console.warn('[SyncStatusPage] Already syncing');
+      return};
+    console.log('[SyncStatusPage] Starting manual sync');
 
     try {
       setSyncing(true);

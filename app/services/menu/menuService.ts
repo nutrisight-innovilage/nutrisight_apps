@@ -172,6 +172,7 @@ class MenuService {
 
       // STEP 2: Fetch from local storage (offline-first)
       const detail = await menuOfflineAPI.fetchFoodItemDetail(id);
+      console.log(`[MenuService] Fetched detail for ${id} from local, ${JSON.stringify(detail)}`);
       
       // STEP 3: Update memory cache
       this.detailsCache[id] = detail;

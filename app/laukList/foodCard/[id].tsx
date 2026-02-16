@@ -38,7 +38,7 @@ export default function CardScreen() {
   const { getFoodDetail, getCachedFoodDetail } = useMenu();
 
   // ==================== DATA LOADING ====================
-  // FIXED: Removed getFoodDetail and getCachedFoodDetail from dependencies
+ 
   useEffect(() => {
     const loadFoodDetail = async () => {
       if (!id) {
@@ -56,7 +56,7 @@ export default function CardScreen() {
         if (cached) {
           setFoodData(cached);
           setIsLoading(false);
-          console.log('Loaded from cache:', cached);
+          console.log('[CardScreenPage] Loaded from cache:', cached);
           return;
         }
 

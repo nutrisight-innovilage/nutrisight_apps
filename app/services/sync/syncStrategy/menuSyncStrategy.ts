@@ -1,5 +1,5 @@
 /**
- * menuSyncStrategy.ts (APPWRITE VERSION)
+ * menuSyncStrategy.ts (APPWRITE VERSION WITH PROPER TYPES)
  * ---------------------------------------------------------------------------
  * Sync strategy untuk menu data dengan OFFLINE-FIRST approach using Appwrite.
  * 
@@ -8,6 +8,7 @@
  * • ✅ Incremental sync menggunakan $updatedAt timestamps
  * • ✅ Real-time sync capability (optional)
  * • ✅ Efficient queries dengan Appwrite Query helpers
+ * • ✅ Proper TypeScript types (no more 'any')
  * 
  * Features:
  * • Background sync tanpa blocking UI
@@ -21,6 +22,18 @@ import { SyncPayload } from '@/app/services/sync/syncQueue';
 import { SyncStrategy } from '@/app/services/sync/syncManager';
 import menuOnlineAPI from '@/app/services/menu/menuOnlineAPI';
 import menuOfflineAPI from '@/app/services/menu/menuOfflineAPI';
+import {
+  FoodItem,
+  FoodItemDetail,
+  MenuSyncResult,
+  MenuDetailsMap,
+  MenuSyncStatus,
+  SyncStats,
+  SyncFailureLog,
+  createDetailsMap,
+  extractFoodItems,
+  isMenuSyncResult,
+} from '@/app/types/food';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,10 +58,10 @@ export class MenuSyncStrategy implements SyncStrategy {
     // Get last sync time if not provided
     const lastSyncTime = data.lastSyncTime || await menuOfflineAPI.getLastSync();
     
-   const payload: SyncPayload = {
-  id: `menu_sync_${Date.now()}`,
-  type: 'menu',  
-  data: {
+    const payload: SyncPayload = {
+      id: `menu_sync_${Date.now()}`,
+      type: 'menu',  
+      data: {
         ...data,
         lastSyncTime: data.forceRefresh ? undefined : lastSyncTime,
       },
@@ -71,7 +84,7 @@ export class MenuSyncStrategy implements SyncStrategy {
   /**
    * Upload/Sync menu data with Appwrite
    */
-  async upload(payload: SyncPayload): Promise<any> {
+  async upload(payload: SyncPayload): Promise<MenuSyncResult> {
     const data = payload.data as MenuSyncData;
 
     try {
@@ -84,6 +97,13 @@ export class MenuSyncStrategy implements SyncStrategy {
       const syncResult = await menuOnlineAPI.syncMenuCache(
         data.forceRefresh ? undefined : data.lastSyncTime || undefined
       );
+
+      
+
+      // Validate sync result
+      if (!isMenuSyncResult(syncResult)) {
+        throw new Error('Invalid sync result format from server');
+      }
 
       console.log(
         `[MenuSyncStrategy] Received ${syncResult.updated.length} updates, ` +
@@ -102,7 +122,7 @@ export class MenuSyncStrategy implements SyncStrategy {
   /**
    * Handle successful sync (OFFLINE-FIRST: Update cache efficiently)
    */
-  async onSuccess(result: any, payload: SyncPayload): Promise<void> {
+  async onSuccess(result: MenuSyncResult, payload: SyncPayload): Promise<void> {
     const data = payload.data as MenuSyncData;
 
     try {
@@ -113,26 +133,23 @@ export class MenuSyncStrategy implements SyncStrategy {
       const { updated, deleted, timestamp } = result;
 
       // Skip processing if no changes
-      if ((!updated || updated.length === 0) && (!deleted || deleted.length === 0)) {
+      if (updated.length === 0 && deleted.length === 0) {
         console.log('[MenuSyncStrategy] No changes to process');
         await menuOfflineAPI.updateLastSync();
         return;
       }
 
       // STEP 1: Get current cached data
-      const currentItems = await menuOfflineAPI.fetchMenuItems();
-      const currentDetailsData = await menuOfflineAPI.fetchMultipleFoodDetails(
+      const currentItems: FoodItem[] = await menuOfflineAPI.fetchMenuItems();
+      const currentDetailsData: FoodItemDetail[] = await menuOfflineAPI.fetchMultipleFoodDetails(
         currentItems.map(i => i.id)
       );
 
       // STEP 2: Create details map for efficient updates
-      const detailsMap: Record<string, any> = {};
-      currentDetailsData.forEach(detail => {
-        detailsMap[detail.id] = detail;
-      });
+      const detailsMap: MenuDetailsMap = createDetailsMap(currentDetailsData);
 
       // STEP 3: Apply updates from Appwrite
-      if (updated && updated.length > 0) {
+      if (updated.length > 0) {
         for (const item of updated) {
           detailsMap[item.id] = item;
         }
@@ -140,8 +157,7 @@ export class MenuSyncStrategy implements SyncStrategy {
       }
 
       // STEP 4: Apply deletions (if any)
-      // Note: Appwrite soft-delete would need custom implementation
-      if (deleted && deleted.length > 0) {
+      if (deleted.length > 0) {
         for (const itemId of deleted) {
           delete detailsMap[itemId];
         }
@@ -149,13 +165,7 @@ export class MenuSyncStrategy implements SyncStrategy {
       }
 
       // STEP 5: Convert to items list
-      const updatedItems = Object.values(detailsMap).map((detail: any) => ({
-        id: detail.id,
-        foodName: detail.foodName,
-        description: detail.description,
-        imageUrl: detail.imageUrl,
-        category: detail.category,
-      }));
+      const updatedItems: FoodItem[] = extractFoodItems(detailsMap);
 
       // STEP 6: Batch save to local storage
       await Promise.all([
@@ -164,11 +174,14 @@ export class MenuSyncStrategy implements SyncStrategy {
         menuOfflineAPI.updateLastSync(),
       ]);
 
-      console.log('[MenuSyncStrategy] Cache updated successfully:', {
+      const stats: SyncStats = {
         totalItems: updatedItems.length,
-        updated: updated?.length || 0,
-        deleted: deleted?.length || 0,
-      });
+        updated: updated.length,
+        deleted: deleted.length,
+        timestamp,
+      };
+
+      console.log('[MenuSyncStrategy] Cache updated successfully:', stats);
     } catch (error) {
       console.error('[MenuSyncStrategy] Success handler failed:', error);
       throw error;
@@ -187,12 +200,12 @@ export class MenuSyncStrategy implements SyncStrategy {
     }
 
     // Log failure for analytics/debugging
-    const failureLog = {
+    const failureLog: SyncFailureLog = {
       timestamp: new Date().toISOString(),
       payloadId: payload.id,
       error: error.message,
       retryCount: payload.retryCount,
-      silent: data.silent,
+      silent: data.silent ?? false,
     };
 
     console.log('[MenuSyncStrategy] Failure logged:', failureLog);
@@ -204,7 +217,7 @@ export class MenuSyncStrategy implements SyncStrategy {
   /**
    * Validate sync data
    */
-  validate(data: any): boolean {
+  validate(data: unknown): boolean {
     if (!data || typeof data !== 'object') {
       console.error('[MenuSyncStrategy] Invalid data: not an object');
       return false;
@@ -319,13 +332,7 @@ export const needsMenuSync = async (
 /**
  * Get menu sync status
  */
-export const getMenuSyncStatus = async (): Promise<{
-  hasCachedData: boolean;
-  lastSync: string | null;
-  cacheAge: number | null;
-  needsSync: boolean;
-  strategy: string;
-}> => {
+export const getMenuSyncStatus = async (): Promise<MenuSyncStatus> => {
   try {
     const hasCachedData = await menuOfflineAPI.hasCachedData();
     const lastSync = await menuOfflineAPI.getLastSync();

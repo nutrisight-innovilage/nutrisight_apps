@@ -199,6 +199,7 @@ export const menuOfflineAPI = {
         const item = details[id];
         
         if (item) {
+          console.log(`[menuOfflineAPI] Found detail for ${id} in cache , detail: ${JSON.stringify(item)}`);
           return item;
         }
       }

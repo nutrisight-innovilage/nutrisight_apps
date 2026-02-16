@@ -49,14 +49,14 @@ const convertAppwriteUser = async (appwriteUser: Models.User<Models.Preferences>
     id: appwriteUser.$id,
     email: appwriteUser.email,
     name: appwriteUser.name,
-    createdAt: appwriteUser.$createdAt,
+    createdAt: userData.$createdAt,
     // Fields from database with proper fallbacks
     age: userData.age || 0,
     weight: userData.weight || 0,
     height: userData.height || 0,
     gender: userData.gender || 'male',
     role: userData.role || 'dewasa',
-    phone: userData.phone,
+    phone: appwriteUser.phone,
     updatedAt: userData.updatedAt || appwriteUser.$updatedAt,
   };
 };
@@ -119,7 +119,6 @@ export const authOnlineAPI = {
             gender: data.gender,
             role: data.role,
             phone: data.phone || null,
-            createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           }
         );

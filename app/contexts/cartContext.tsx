@@ -85,7 +85,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [ricePortion, setRicePortionState] = useState<number>(1);
+  const [ricePortion, setRicePortionState] = useState<number>(200);
   const [mealMetadata, setMealMetadata] = useState<MealMetadata | null>(null);
   const [mealSummary, setMealSummary] = useState<MealSummary | null>(null);
 
@@ -233,7 +233,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Update UI state
       React.startTransition(() => {
         setCart([]);
-        setRicePortionState(1);
+        setRicePortionState(200);
         setMealMetadata(null);
         setMealSummary(null);
       });
@@ -353,7 +353,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Update UI state
         React.startTransition(() => {
           setCart([]);
-          setRicePortionState(1);
+          setRicePortionState(200);
           setMealMetadata(null);
           setMealSummary(null);
           if (response.scan) {

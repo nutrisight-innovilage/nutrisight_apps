@@ -56,20 +56,20 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
       try {
         console.log('[App] Starting sync initialization...');
         setInitStatus({ step: 'Initializing sync queue...' });
-        progress.value = withSpring(0.25);
+        progress.value = withSpring(0.25, { damping: 15, stiffness: 100 });
 
         const syncQueue = getSyncQueue();
         await syncQueue.initialize();
         console.log('[App] ✓ SyncQueue initialized');
 
         setInitStatus({ step: 'Initializing sync manager...' });
-        progress.value = withSpring(0.5);
+        progress.value = withSpring(0.5, { damping: 15, stiffness: 100 });
 
         const syncManager = getSyncManager(syncQueue);
         console.log('[App] ✓ SyncManager initialized');
 
         setInitStatus({ step: 'Registering sync strategies...' });
-        progress.value = withSpring(0.7);
+        progress.value = withSpring(0.7, { damping: 15, stiffness: 100 });
 
         // ✅ Register all sync strategies
         syncManager.registerStrategy('auth', authSyncStrategy);
@@ -85,7 +85,7 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
         ]);
 
         setInitStatus({ step: 'Checking queue...' });
-        progress.value = withSpring(0.85);
+        progress.value = withSpring(0.85, { damping: 15, stiffness: 100 });
 
         const status = await syncManager.getStatus();
         console.log('[App] Queue status:', {
@@ -140,44 +140,126 @@ function SyncInitializer({ onReady }: { onReady: () => void }) {
   }));
 
   return (
-    <View className="flex-1 bg-background items-center justify-center px-6">
-      <View className="items-center">
-        <Animated.View entering={FadeIn.duration(400)}>
-          {/* Animated Spinner */}
+  <View className="flex-1 bg-white items-center justify-center px-6">
+    <Animated.View 
+      entering={FadeIn.duration(600)} 
+      className="items-center w-full max-w-sm"
+    >
+      {/* Main Spinner Container with Glow Effect */}
+      <View className="relative items-center justify-center mb-8">
+        {/* Outer Glow Ring */}
+        <Animated.View 
+          style={spinnerStyle}
+          className="absolute w-24 h-24 rounded-full border-2 border-emerald-200/40"
+        />
+        
+        {/* Middle Ring */}
+        <Animated.View 
+          style={[spinnerStyle, { transform: [{ rotate: '-45deg' }] }]}
+          className="absolute w-20 h-20 rounded-full border-3 border-emerald-300/50"
+        />
+        
+        {/* Main Spinner */}
+        <Animated.View 
+          style={spinnerStyle}
+          className="w-16 h-16 rounded-full border-4 border-gray-200 border-t-emerald-500 border-r-emerald-400"
+        />
+        
+        {/* Center Icon - Sync Symbol */}
+        <View className="absolute bg-emerald-500 rounded-full p-3">
+          <Text className="text-white text-xl font-bold">🔄</Text>
+        </View>
+      </View>
+
+      {/* Progress Section */}
+      <View className="w-full space-y-3">
+        {/* Progress Bar */}
+        <View className="w-full h-2.5 rounded-full overflow-hidden bg-gray-100 shadow-inner">
           <Animated.View 
-            style={spinnerStyle}
-            className="w-16 h-16 rounded-full border-4 border-primary/20 border-t-primary" 
+            style={progressStyle}
+            className="h-full bg-emerald-500 rounded-full"
           />
+        </View>
 
-          {/* Progress Bar */}
-          <View className="w-64 h-2 rounded-full mt-6 overflow-hidden bg-primary/20">
-            <Animated.View 
-              style={progressStyle}
-              className="h-full bg-primary"
-            />
-          </View>
+        {/* Status Text with Pulsing Dot */}
+        <Animated.View 
+          entering={FadeIn.duration(300)}
+          className="flex-row items-center justify-center space-x-2"
+        >
+          <View className="w-1.5 h-1.5 rounded-full bg-emerald-500" 
+            style={{
+              shadowColor: '#10b981',
+              shadowOpacity: 0.8,
+              shadowRadius: 4,
+            }}
+          />
+          <Text className="text-gray-600 text-base font-medium">
+            {initStatus.step}
+          </Text>
+        </Animated.View>
 
-          {/* Status Text */}
-          <View className="mt-4">
-            <Text className="text-text-secondary text-center">
-              {initStatus.step}
-            </Text>
-          </View>
+        {/* Progress Info */}
+        <View className="flex-row justify-between px-1 mt-1">
+          <Text className="text-xs text-gray-400">Mempersiapkan aplikasi</Text>
+          <Text className="text-xs text-emerald-500 font-semibold">
+            {Math.round(progress.value * 100)}%
+          </Text>
+        </View>
+      </View>
 
-          {/* Error Text */}
-          {initStatus.error && (
-            <View className="mt-2">
-              <Animated.View entering={FadeIn.duration(300).delay(200)}>
-                <Text className="text-error text-sm text-center">
+      {/* Error Display */}
+      {initStatus.error && (
+        <Animated.View 
+          entering={FadeIn.duration(300).delay(200)}
+          className="mt-6 w-full"
+        >
+          <View className="bg-red-50 border border-red-200 rounded-2xl p-4">
+            <View className="flex-row items-start space-x-3">
+              <View className="bg-red-100 rounded-full p-2">
+                <Text className="text-base">⚠️</Text>
+              </View>
+              <View className="flex-1">
+                <Text className="text-red-800 font-semibold text-sm mb-1">
+                  Terjadi Kesalahan
+                </Text>
+                <Text className="text-red-600 text-xs leading-5">
                   {initStatus.error}
                 </Text>
-              </Animated.View>
+                <Text className="text-red-500 text-xs mt-2 italic">
+                  Aplikasi akan tetap dilanjutkan...
+                </Text>
+              </View>
             </View>
-          )}
+          </View>
         </Animated.View>
-      </View>
-    </View>
-  );
+      )}
+
+      {/* App Info Footer */}
+      {!initStatus.error && (
+        <Animated.View 
+          entering={FadeIn.duration(400).delay(1500)}
+          className="mt-12 w-full"
+        >
+          <View className="bg-emerald-50 border border-emerald-100 rounded-xl p-4">
+            <Text className="text-emerald-700 text-xs text-center leading-5 font-medium">
+              💡 Menyiapkan menu dan sinkronisasi data
+            </Text>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* Brand Footer */}
+      <Animated.View 
+        entering={FadeIn.duration(400).delay(2000)}
+        className="absolute bottom-12"
+      >
+        <Text className="text-gray-400 text-xs">
+          Powered by NutriTrack
+        </Text>
+      </Animated.View>
+    </Animated.View>
+  </View>
+);
 }
 
 // ============================================================================
