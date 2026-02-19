@@ -1,13 +1,22 @@
 /**
- * menuContext.tsx (FIXED - Auto-detect mock data and sync)
+ * menuContext.tsx (FIXED - Sync Listener Integration)
  * ---------------------------------------------------------------------------
- * ✅ PASTI mendeteksi mock data (id: '1'-'5')
- * ✅ PASTI sync jika online
- * ✅ PASTI refresh UI setelah sync
+ * FIXES:
+ * • ✅ FIX #1: Subscribe to menuService.addSyncListener()
+ *   → Auto-refresh UI when background sync completes
+ * • ✅ FIX #2: Removed race-prone mock detection + forced sync
+ *   → Background sync + listener handles this automatically
+ * • ✅ FIX #3: Simplified initialization — no more setTimeout hacks
+ * 
+ * NEW FLOW:
+ * 1. Mount → fetchMenu() → gets whatever is in cache (mock or real)
+ * 2. menuService auto-queues background sync if needed
+ * 3. Background sync completes → menuService notifies listener
+ * 4. Listener fires → re-fetch from cache → get real data → UI updates
  * ---------------------------------------------------------------------------
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import { FoodItem, FoodItemDetail } from '@/app/types/food';
 import menuService from '@/app/services/menu/menuService';
 
@@ -74,6 +83,9 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Ref to track if component is still mounted (avoid setState on unmount)
+  const mountedRef = useRef(true);
+
   // Derived state - categories
   const categories = useMemo(() => {
     const uniqueCategories = Array.from(
@@ -86,49 +98,50 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
   // Actions - delegated to service
   // ---------------------------------------------------------------------------
 
-  /**
-   * Fetch menu data
-   */
   const fetchMenu = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
 
       const data = await menuService.fetchMenuItems();
-      setMenuData(data);
-
+      if (mountedRef.current) {
+        setMenuData(data);
+      }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Gagal memuat data menu';
-      setError(errorMessage);
-      console.error('[MenuContext] Error fetching menu:', err);
+      if (mountedRef.current) {
+        const errorMessage = err instanceof Error ? err.message : 'Gagal memuat data menu';
+        setError(errorMessage);
+        console.error('[MenuContext] Error fetching menu:', err);
+      }
     } finally {
-      setIsLoading(false);
+      if (mountedRef.current) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
-  /**
-   * Refresh menu data
-   */
   const refreshMenu = useCallback(async () => {
     try {
       setIsRefreshing(true);
       setError(null);
 
       const data = await menuService.fetchMenuItems();
-      setMenuData(data);
-
+      if (mountedRef.current) {
+        setMenuData(data);
+      }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Gagal memuat data menu';
-      setError(errorMessage);
-      console.error('[MenuContext] Error refreshing menu:', err);
+      if (mountedRef.current) {
+        const errorMessage = err instanceof Error ? err.message : 'Gagal memuat data menu';
+        setError(errorMessage);
+        console.error('[MenuContext] Error refreshing menu:', err);
+      }
     } finally {
-      setIsRefreshing(false);
+      if (mountedRef.current) {
+        setIsRefreshing(false);
+      }
     }
   }, []);
 
-  /**
-   * Get food detail
-   */
   const getFoodDetail = useCallback(async (id: string): Promise<FoodItemDetail> => {
     try {
       return await menuService.fetchFoodItemDetail(id);
@@ -138,9 +151,6 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
     }
   }, []);
 
-  /**
-   * Get multiple food details
-   */
   const getMultipleFoodDetails = useCallback(async (ids: string[]): Promise<FoodItemDetail[]> => {
     try {
       return await menuService.fetchMultipleFoodDetails(ids);
@@ -150,23 +160,14 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
     }
   }, []);
 
-  /**
-   * Get cached food detail
-   */
   const getCachedFoodDetail = useCallback((id: string): FoodItemDetail | undefined => {
     return menuService.getCachedDetail(id);
   }, []);
 
-  /**
-   * Clear detail cache
-   */
   const clearDetailCache = useCallback(() => {
     menuService.clearCache();
   }, []);
 
-  /**
-   * Search menu
-   */
   const searchMenu = useCallback(async (query: string): Promise<FoodItem[]> => {
     try {
       setError(null);
@@ -178,9 +179,6 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
     }
   }, []);
 
-  /**
-   * Get menu by category
-   */
   const getMenuByCategory = useCallback(async (category: string): Promise<FoodItem[]> => {
     try {
       setError(null);
@@ -192,9 +190,6 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
     }
   }, []);
 
-  /**
-   * Calculate nutrition summary
-   */
   const calculateNutritionSummary = useCallback(async (ids: string[]) => {
     try {
       return await menuService.getNutritionalSummary(ids);
@@ -204,17 +199,19 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
     }
   }, []);
 
-  /**
-   * Sync menu
-   */
   const syncMenu = useCallback(async (forceRefresh: boolean = false): Promise<boolean> => {
     try {
       const success = await menuService.syncMenu(forceRefresh);
       
-      // ✅ PASTI refresh menu data setelah sync berhasil
       console.log(`[MenuContext] Sync ${success ? 'succeeded' : 'failed'}. Force refresh: ${forceRefresh}`);
-      if (success) {
-        await fetchMenu();
+      
+      // Note: No need to manually fetchMenu() here anymore.
+      // The sync listener (below) handles UI refresh automatically.
+      // But we keep it as a safety net for manual syncMenu calls
+      // where the caller expects data to be fresh after await.
+      if (success && mountedRef.current) {
+        const data = await menuService.fetchMenuItems();
+        setMenuData(data);
       }
       
       return success;
@@ -222,11 +219,8 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
       console.error('[MenuContext] Error syncing menu:', err);
       return false;
     }
-  }, [fetchMenu]);
+  }, []);
 
-  /**
-   * Get cache info
-   */
   const getCacheInfo = useCallback(async () => {
     try {
       return await menuService.getCacheInfo();
@@ -237,98 +231,87 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Lifecycle - Smart initialization with mock detection
+  // Lifecycle
   // ---------------------------------------------------------------------------
 
+  /**
+   * ✅ FIX #1: Subscribe to sync completion events from menuService.
+   * When background sync finishes (whether triggered by menuService init,
+   * network restore, or SyncManager auto-sync), we re-fetch from cache
+   * and update the UI.
+   */
   useEffect(() => {
-    const initializeMenu = async () => {
-      console.log('[MenuContext] 🚀 Initializing menu...');
-      
-      // STEP 1: Fetch data (bisa mock atau cached real data)
-      await fetchMenu();
-      
-      // Wait for state to update
-      await new Promise(resolve => setTimeout(resolve, 100));
-    };
-    
-    initializeMenu();
-  }, [fetchMenu]);
+    const unsubscribe = menuService.addSyncListener(async (success: boolean) => {
+      if (!mountedRef.current) return;
 
-  // ✅ SEPARATE EFFECT: Detect mock data setelah menuData ter-update
-  useEffect(() => {
-    // Skip jika masih loading atau tidak ada data
-    if (isLoading || menuData.length === 0) {
-      return;
-    }
-
-    const checkAndSyncIfMock = async () => {
-      // STEP 2: Check if we got mock data
-      // Mock data PASTI punya id '1', '2', '3', '4', '5'
-      const isMockData = 
-        menuData.length === 5 && 
-        menuData.every(item => ['1', '2', '3', '4', '5'].includes(item.id));
-      
-      if (isMockData) {
-        console.log('[MenuContext] 🔍 Mock data detected (5 items with ids 1-5)');
-        
-        // STEP 3: Check if online
-        const cacheInfo = await getCacheInfo();
-        
-        if (cacheInfo?.isOnline) {
-          console.log('[MenuContext] 📡 Online detected → Syncing from Appwrite...');
-          
-          // STEP 4: Force sync from Appwrite (BLOCKING, wait for completion)
-          const syncSuccess = await syncMenu(true); // forceRefresh = true
-          
-          if (syncSuccess) {
-            console.log('[MenuContext] ✅ Sync completed successfully');
-            console.log('[MenuContext] 🎉 Real data loaded:', menuData.length, 'items');
-          } else {
-            console.warn('[MenuContext] ⚠️ Sync failed, keeping mock data');
+      if (success) {
+        console.log('[MenuContext] 🔄 Sync completed, refreshing menu data from cache...');
+        try {
+          const data = await menuService.fetchMenuItems();
+          if (mountedRef.current) {
+            setMenuData(data);
+            console.log(`[MenuContext] ✅ UI updated with ${data.length} items`);
           }
-        } else {
-          console.log('[MenuContext] 📴 Offline, keeping mock data for now');
+        } catch (err) {
+          console.error('[MenuContext] Failed to refresh after sync:', err);
         }
       } else {
-        console.log('[MenuContext] ✅ Real data already loaded:', menuData.length, 'items');
+        console.log('[MenuContext] ⚠️ Sync completed with failure, keeping current data');
       }
-    };
+    });
 
-    checkAndSyncIfMock();
-  }, [menuData, isLoading]); // Run when menuData updates
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  /**
+   * ✅ FIX #2 & #3: Simplified initialization.
+   * 
+   * Just fetch from cache. That's it.
+   * - If cache has real data → shows real data immediately.
+   * - If cache is empty → shows fallback/mock data.
+   * - menuService will auto-queue background sync if needed.
+   * - When sync completes → listener above fires → UI updates with real data.
+   * 
+   * No more:
+   * - setTimeout hacks
+   * - Mock data detection
+   * - Forced sync that races with background sync
+   */
+  useEffect(() => {
+    console.log('[MenuContext] 🚀 Initializing menu...');
+    fetchMenu();
+  }, [fetchMenu]);
+
+  /**
+   * Cleanup on unmount
+   */
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Context Value
   // ---------------------------------------------------------------------------
 
   const value: MenuContextType = {
-    // Data
     menuData,
     categories,
-    
-    // States
     isLoading,
     isRefreshing,
     error,
-    
-    // Actions
     refreshMenu,
     fetchMenu,
-    
-    // Detail operations
     getFoodDetail,
     getMultipleFoodDetails,
     getCachedFoodDetail,
     clearDetailCache,
-    
-    // Search & Filter
     searchMenu,
     getMenuByCategory,
-    
-    // Nutrition
     calculateNutritionSummary,
-    
-    // Sync
     syncMenu,
     getCacheInfo,
   };
@@ -340,9 +323,6 @@ export const MenuProvider: React.FC<MenuProviderProps> = ({ children }) => {
 // Hook
 // ---------------------------------------------------------------------------
 
-/**
- * Custom hook to use menu context
- */
 export const useMenu = (): MenuContextType => {
   const context = useContext(MenuContext);
   if (context === undefined) {

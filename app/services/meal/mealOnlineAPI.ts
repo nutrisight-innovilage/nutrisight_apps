@@ -1,12 +1,12 @@
 /**
- * mealOnlineAPI.ts (v2.0 COMPLETE)
+ * mealOnlineAPI.ts (v2.1 - balancedMealsCount + No Mock Data)
  * ---------------------------------------------------------------------------
  * Service layer untuk ONLINE meal & nutrition operations.
  * 
- * v2.0 Features:
- * • ✅ Improved bulkUploadScans with batch processing
- * • ✅ Real nutrition calculations from menu_items
- * • ✅ JSON string handling for Appwrite
+ * v2.1 Changes:
+ * • ✅ WeeklyInsight now includes balancedMealsCount
+ * • ✅ Removed all hardcoded/mock menu item references
+ * • ✅ All nutrition data comes from Appwrite menu_items collection
  * ---------------------------------------------------------------------------
  */
 
@@ -28,6 +28,7 @@ import {
 } from '@/app/types/meal';
 import { CartItem } from '@/app/types/food';
 import { Models, Query } from 'appwrite';
+import { isMealBalanced } from '@/app/utils/nutritionUtils';
 
 // ---------------------------------------------------------------------------
 // Raw Types (from Appwrite Database)
@@ -68,7 +69,6 @@ interface MenuItemNutrition {
 
 const BATCH_SIZE = 15;
 const DELAY_BETWEEN_BATCHES = 1000;
-
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
@@ -85,13 +85,10 @@ const convertToNutritionScan = (doc: NutritionScanDocumentRaw): NutritionScan =>
       ? `${doc.mealType.charAt(0).toUpperCase() + doc.mealType.slice(1)}`
       : 'My Meal',
     date: date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
+      month: 'short', day: 'numeric', year: 'numeric',
     }),
     time: date.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+      hour: '2-digit', minute: '2-digit',
     }),
     calories: doc.totalCalories,
     protein: doc.totalProtein,
@@ -120,19 +117,20 @@ const convertToNutritionGoals = (doc: NutritionGoalsDocumentRaw): NutritionGoals
 };
 
 // ---------------------------------------------------------------------------
-// Meal Online API (v2.0 Complete)
+// Meal Online API (v2.1)
 // ---------------------------------------------------------------------------
 
 export class MealOnlineAPI {
+
   // =========================================================================
-  // MEAL ANALYSIS
+  // MEAL ANALYSIS - fetches nutrition from Appwrite menu_items
   // =========================================================================
 
   static async analyzeMeal(request: AnalyzeMealRequest): Promise<AnalyzeMealResponse> {
     try {
       console.log('[MealOnlineAPI] Analyzing meal...');
 
-      // Fetch nutrition data from menu_items
+      // Fetch nutrition data from Appwrite menu_items
       const itemIds = request.items.map(item => item.id);
       
       const nutritionData = await Promise.all(
@@ -143,7 +141,6 @@ export class MealOnlineAPI {
               COLLECTIONS.MENU_ITEMS,
               id
             );
-            
             return {
               id: doc.$id,
               calories: doc.calories || 0,
@@ -161,9 +158,7 @@ export class MealOnlineAPI {
       // Create nutrition map
       const nutritionMap: Record<string, MenuItemNutrition> = {};
       nutritionData.forEach(data => {
-        if (data) {
-          nutritionMap[data.id] = data;
-        }
+        if (data) nutritionMap[data.id] = data;
       });
 
       // Calculate totals
@@ -193,7 +188,7 @@ export class MealOnlineAPI {
       totalCarbs += riceCarbs;
       totalFats += riceFats;
 
-      // Create scan document
+      // Create scan document in Appwrite
       const scanDoc = await databases.createDocument<NutritionScanDocumentRaw>(
         DATABASE_ID,
         COLLECTIONS.NUTRITION_SCANS,
@@ -215,16 +210,14 @@ export class MealOnlineAPI {
       const scan = convertToNutritionScan(scanDoc);
 
       console.log('[MealOnlineAPI] ✅ Meal analyzed and saved');
-
       return {
         success: true,
-        scan: scan,
+        scan,
         analysisId: scan.id,
         message: 'Meal analyzed successfully',
       };
     } catch (error) {
       console.error('[MealOnlineAPI] Error analyzing meal:', error);
-      
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Analysis failed',
@@ -233,7 +226,7 @@ export class MealOnlineAPI {
   }
 
   // =========================================================================
-  // BULK UPLOAD (v2.0 - Improved with Batching)
+  // BULK UPLOAD
   // =========================================================================
 
   static async bulkUploadScans(scans: any[]): Promise<BulkSyncResult> {
@@ -243,61 +236,38 @@ export class MealOnlineAPI {
     const errors: Array<{ localId: string; error: string }> = [];
 
     try {
-      // Split into batches
       const batches: any[][] = [];
       for (let i = 0; i < scans.length; i += BATCH_SIZE) {
         batches.push(scans.slice(i, i + BATCH_SIZE));
       }
 
-      console.log(`[MealOnlineAPI:BulkUpload] Split into ${batches.length} batches`);
-
-      // Process each batch sequentially
       for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
-        console.log(`[MealOnlineAPI:BulkUpload] Processing batch ${i + 1}/${batches.length} (${batch.length} scans)...`);
-
         const batchResult = await this.processScanBatch(batch);
-        
         syncedIds.push(...batchResult.syncedIds);
         errors.push(...batchResult.errors);
 
-        console.log(
-          `[MealOnlineAPI:BulkUpload] Batch ${i + 1} complete: ` +
-          `${batchResult.syncedIds.length} synced, ${batchResult.errors.length} failed`
-        );
-
-        // Delay between batches
-        if (i < batches.length - 1) {
-          await delay(DELAY_BETWEEN_BATCHES);
-        }
+        if (i < batches.length - 1) await delay(DELAY_BETWEEN_BATCHES);
       }
 
-      const result: BulkSyncResult = {
+      return {
         success: syncedIds.length > 0,
         syncedCount: syncedIds.length,
         failedCount: errors.length,
         syncedIds,
         errors,
       };
-
-      console.log(`[MealOnlineAPI:BulkUpload] ✅ Complete: ${syncedIds.length}/${scans.length} synced`);
-
-      return result;
     } catch (error) {
       console.error('[MealOnlineAPI:BulkUpload] Fatal error:', error);
-      
       return {
         success: false,
         syncedCount: syncedIds.length,
         failedCount: scans.length - syncedIds.length,
         syncedIds,
-        errors: [
-          ...errors,
-          {
-            localId: 'bulk_fatal',
-            error: error instanceof Error ? error.message : 'Unknown error',
-          },
-        ],
+        errors: [...errors, {
+          localId: 'bulk_fatal',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }],
       };
     }
   }
@@ -315,31 +285,26 @@ export class MealOnlineAPI {
           throw new Error('Invalid scan data');
         }
 
-        const scanDoc = {
-          userId: scan.userId,
-          date: scan.date || scan.lastModified || new Date().toISOString(),
-          mealType: scan.mealType,
-          items: JSON.stringify(scan.items || []),
-          ricePortion: scan.ricePortion || 1,
-          totalCalories: Math.round(scan.calories),
-          totalProtein: Math.round(scan.protein || 0),
-          totalCarbs: Math.round(scan.carbs || 0),
-          totalFats: Math.round(scan.fats || 0),
-          notes: scan.notes || '',
-        };
-
-        const created = await databases.createDocument(
+        await databases.createDocument(
           DATABASE_ID,
           COLLECTIONS.NUTRITION_SCANS,
           generateId(),
-          scanDoc
+          {
+            userId: scan.userId,
+            date: scan.date || scan.lastModified || new Date().toISOString(),
+            mealType: scan.mealType,
+            items: JSON.stringify(scan.items || []),
+            ricePortion: scan.ricePortion || 1,
+            totalCalories: Math.round(scan.calories),
+            totalProtein: Math.round(scan.protein || 0),
+            totalCarbs: Math.round(scan.carbs || 0),
+            totalFats: Math.round(scan.fats || 0),
+            notes: scan.notes || '',
+          }
         );
 
         syncedIds.push(scan.localId || scan.id);
-        console.log(`[MealOnlineAPI:BulkUpload] ✅ Uploaded: ${created.$id}`);
       } catch (error) {
-        console.error(`[MealOnlineAPI:BulkUpload] ❌ Failed: ${scan.localId || scan.id}:`, error);
-        
         errors.push({
           localId: scan.localId || scan.id,
           error: error instanceof Error ? error.message : 'Upload failed',
@@ -356,21 +321,15 @@ export class MealOnlineAPI {
 
   static async getPersonalizedThresholds(userId?: string): Promise<PersonalizedThresholds | null> {
     try {
-      console.log('[MealOnlineAPI] Getting personalized thresholds...');
-
+      // TODO: Fetch from user profile when personalization is implemented
       const thresholds: PersonalizedThresholds = {
         calories: { min: 1800, max: 2200 },
         protein: { min: 50, max: 100 },
         carbs: { min: 200, max: 300 },
         fats: { min: 50, max: 80 },
         calculatedAt: new Date().toISOString(),
-        basedOn: {
-          activityLevel: 'moderate',
-          goal: 'maintain',
-        },
+        basedOn: { activityLevel: 'moderate', goal: 'maintain' },
       };
-
-      console.log('[MealOnlineAPI] ✅ Personalized thresholds returned');
       return thresholds;
     } catch (error) {
       console.error('[MealOnlineAPI] Error getting personalized thresholds:', error);
@@ -379,7 +338,7 @@ export class MealOnlineAPI {
   }
 
   // =========================================================================
-  // WEEKLY INSIGHTS
+  // WEEKLY INSIGHTS (v2.1 - with balancedMealsCount)
   // =========================================================================
 
   static async getWeeklyInsights(
@@ -406,12 +365,16 @@ export class MealOnlineAPI {
       );
 
       const scans = response.documents;
+      const nutritionScans = scans.map(convertToNutritionScan);
 
       const totalCalories = scans.reduce((sum, s) => sum + s.totalCalories, 0);
       const totalProtein = scans.reduce((sum, s) => sum + s.totalProtein, 0);
       const totalCarbs = scans.reduce((sum, s) => sum + s.totalCarbs, 0);
       const totalFats = scans.reduce((sum, s) => sum + s.totalFats, 0);
       const mealsCount = scans.length;
+
+      // ✅ v2.1: Count balanced meals
+      const balancedMealsCount = nutritionScans.filter(scan => isMealBalanced(scan)).length;
 
       const insights: WeeklyInsight = {
         totalCalories,
@@ -420,6 +383,7 @@ export class MealOnlineAPI {
         totalCarbs,
         totalFats,
         mealsCount,
+        balancedMealsCount,
       };
 
       console.log('[MealOnlineAPI] ✅ Weekly insights calculated');
@@ -436,8 +400,6 @@ export class MealOnlineAPI {
 
   static async getNutritionGoals(userId: string): Promise<NutritionGoals | null> {
     try {
-      console.log('[MealOnlineAPI] Fetching nutrition goals...');
-
       const response = await databases.listDocuments<NutritionGoalsDocumentRaw>(
         DATABASE_ID,
         COLLECTIONS.NUTRITION_GOALS,
@@ -448,15 +410,8 @@ export class MealOnlineAPI {
         ]
       );
 
-      if (response.documents.length === 0) {
-        console.log('[MealOnlineAPI] No nutrition goals found');
-        return null;
-      }
-
-      const goals = convertToNutritionGoals(response.documents[0]);
-      
-      console.log('[MealOnlineAPI] ✅ Nutrition goals fetched');
-      return goals;
+      if (response.documents.length === 0) return null;
+      return convertToNutritionGoals(response.documents[0]);
     } catch (error) {
       console.error('[MealOnlineAPI] Error fetching nutrition goals:', error);
       return null;
@@ -465,15 +420,10 @@ export class MealOnlineAPI {
 
   static async saveNutritionGoals(userId: string, goals: NutritionGoals): Promise<boolean> {
     try {
-      console.log('[MealOnlineAPI] Saving nutrition goals...');
-
       const existingGoals = await databases.listDocuments<NutritionGoalsDocumentRaw>(
         DATABASE_ID,
         COLLECTIONS.NUTRITION_GOALS,
-        [
-          Query.equal('userId', userId),
-          Query.limit(1),
-        ]
+        [Query.equal('userId', userId), Query.limit(1)]
       );
 
       const goalsData = {
@@ -486,21 +436,16 @@ export class MealOnlineAPI {
 
       if (existingGoals.documents.length > 0) {
         await databases.updateDocument(
-          DATABASE_ID,
-          COLLECTIONS.NUTRITION_GOALS,
-          existingGoals.documents[0].$id,
-          goalsData
+          DATABASE_ID, COLLECTIONS.NUTRITION_GOALS,
+          existingGoals.documents[0].$id, goalsData
         );
       } else {
         await databases.createDocument(
-          DATABASE_ID,
-          COLLECTIONS.NUTRITION_GOALS,
-          generateId(),
-          goalsData
+          DATABASE_ID, COLLECTIONS.NUTRITION_GOALS,
+          generateId(), goalsData
         );
       }
 
-      console.log('[MealOnlineAPI] ✅ Nutrition goals saved');
       return true;
     } catch (error) {
       console.error('[MealOnlineAPI] Error saving nutrition goals:', error);
@@ -515,11 +460,8 @@ export class MealOnlineAPI {
   static async getScanById(scanId: string): Promise<NutritionScan | null> {
     try {
       const doc = await databases.getDocument<NutritionScanDocumentRaw>(
-        DATABASE_ID,
-        COLLECTIONS.NUTRITION_SCANS,
-        scanId
+        DATABASE_ID, COLLECTIONS.NUTRITION_SCANS, scanId
       );
-
       return convertToNutritionScan(doc);
     } catch (error) {
       console.error('[MealOnlineAPI] Error fetching scan:', error);
@@ -532,23 +474,15 @@ export class MealOnlineAPI {
     updates: Partial<Omit<NutritionScan, 'id' | 'userId'>>
   ): Promise<boolean> {
     try {
-      console.log('[MealOnlineAPI] Updating scan...');
-
       const updateData: any = {};
-
       if (updates.calories !== undefined) updateData.totalCalories = updates.calories;
       if (updates.protein !== undefined) updateData.totalProtein = updates.protein;
       if (updates.carbs !== undefined) updateData.totalCarbs = updates.carbs;
       if (updates.fats !== undefined) updateData.totalFats = updates.fats;
 
       await databases.updateDocument(
-        DATABASE_ID,
-        COLLECTIONS.NUTRITION_SCANS,
-        scanId,
-        updateData
+        DATABASE_ID, COLLECTIONS.NUTRITION_SCANS, scanId, updateData
       );
-
-      console.log('[MealOnlineAPI] ✅ Scan updated');
       return true;
     } catch (error) {
       console.error('[MealOnlineAPI] Error updating scan:', error);
@@ -558,15 +492,7 @@ export class MealOnlineAPI {
 
   static async deleteScan(scanId: string): Promise<boolean> {
     try {
-      console.log('[MealOnlineAPI] Deleting scan...');
-
-      await databases.deleteDocument(
-        DATABASE_ID,
-        COLLECTIONS.NUTRITION_SCANS,
-        scanId
-      );
-
-      console.log('[MealOnlineAPI] ✅ Scan deleted');
+      await databases.deleteDocument(DATABASE_ID, COLLECTIONS.NUTRITION_SCANS, scanId);
       return true;
     } catch (error) {
       console.error('[MealOnlineAPI] Error deleting scan:', error);
@@ -580,14 +506,9 @@ export class MealOnlineAPI {
 
   static async healthCheck(): Promise<boolean> {
     try {
-      await databases.listDocuments(
-        DATABASE_ID,
-        COLLECTIONS.NUTRITION_SCANS,
-        [Query.limit(1)]
-      );
+      await databases.listDocuments(DATABASE_ID, COLLECTIONS.NUTRITION_SCANS, [Query.limit(1)]);
       return true;
     } catch (error) {
-      console.error('[MealOnlineAPI] Health check failed:', error);
       return false;
     }
   }

@@ -3,7 +3,7 @@ import { View, Text, ScrollView, Switch, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import CustomHeader from '@/app/components/customHeader';
 import { NotificationSetting } from '@/app/types/pengaturan';
-import { NotificationService } from '@/app/services/notificationAPI';
+import { NotificationService } from '@/app/services/pengaturan/notificationAPI';
 import * as Notifications from 'expo-notifications';
 
 export default function NotifikasiPage() {

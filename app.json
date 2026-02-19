@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "YourAppName",
-    "slug": "your-app-name",
-    "version": "1.0.0",
+    "name": "Nutrisight",
+    "slug": "Nutrisight",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,7 +16,7 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourcompany.yourapp",
+      "bundleIdentifier": "com.innovilage.nutrisight",
       "infoPlist": {
         "NSCameraUsageDescription": "Aplikasi ini memerlukan akses kamera untuk mengambil foto.",
         "NSMicrophoneUsageDescription": "Aplikasi ini memerlukan akses mikrofon untuk merekam video.",
@@ -30,7 +30,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.yourcompany.yourapp",
+      "package": "com.innovilage.nutrisight",
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",

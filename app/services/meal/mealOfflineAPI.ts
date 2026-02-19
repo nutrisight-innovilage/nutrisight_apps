@@ -1,13 +1,13 @@
 /**
- * mealOfflineAPI.ts (v2.0 COMPLETE)
+ * mealOfflineAPI.ts (v2.2 - Dynamic Food Catalog + NutritionCalculator)
  * ---------------------------------------------------------------------------
  * Service layer untuk semua operasi OFFLINE meal & nutrition.
  * 
- * v2.0 Features:
- * • ✅ Historical data sync support
- * • ✅ Photo analysis offline tracking
- * • ✅ Batch sync methods
- * • ✅ Sync diagnostics
+ * v2.2 Changes:
+ * • ✅ Dynamic food catalog loaded from Appwrite, cached in AsyncStorage
+ * • ✅ Nutrition calc delegates to NutritionCalculator (single source of truth)
+ * • ✅ buildCatalogFromDocs() converts Appwrite food docs → FoodCatalog
+ * • ✅ Removed hardcoded food IDs — catalog is built from real DB
  * ---------------------------------------------------------------------------
  */
 
@@ -34,6 +34,13 @@ import {
   PendingAdvice,
 } from '@/app/types/meal';
 import { PersonalizedThresholds } from './mealOnlineAPI';
+import {
+  NutritionCalculator,
+  MealNutritionResult,
+  FoodCatalog,
+  buildCatalogFromDocs,
+} from './nutritionCalculator';
+import { isMealBalanced } from '@/app/utils/nutritionUtils';
 
 // ---------------------------------------------------------------------------
 // Local Types
@@ -52,16 +59,6 @@ interface SyncStatus {
   pendingScansCount: number;
   pendingPhotosCount: number;
   PendingAdviceCount: number;
-}
-
-interface FoodNutritionData {
-  id: string;
-  name: string;
-  caloriesPer100g: number;
-  proteinPer100g: number;
-  carbsPer100g: number;
-  fatsPer100g: number;
-  servingSize: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,8 +80,10 @@ const STORAGE_KEYS = {
   COMPLETED_SCANS: '@nutrition_analysis:completed_scans',
   SCANS_INDEX: '@nutrition_analysis:scans_index',
   
-  // Local nutrition data
-  FOOD_NUTRITION_DB: '@nutrition_analysis:food_nutrition_db',
+  // ✅ v2.2: Food catalog cache (built from Appwrite food docs)
+  FOOD_CATALOG: '@nutrition_analysis:food_catalog',
+  
+  // Goals & thresholds cache
   NUTRITION_GOALS_PREFIX: '@nutrition_analysis:goals_',
   THRESHOLDS_PREFIX: '@nutrition_analysis:thresholds_',
   
@@ -100,20 +99,18 @@ const STORAGE_KEYS = {
 let cartCache: CartItem[] = [];
 let mealMetadataCache: MealMetadata | null = null;
 let completedScansCache: LocalNutritionScan[] = [];
+let foodCatalogCache: FoodCatalog | null = null;
 
 // ---------------------------------------------------------------------------
-// Helper Functions
+// Helpers
 // ---------------------------------------------------------------------------
 
 const delay = (ms = 300) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const generateLocalId = (): string => {
-  return `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-};
+const generateLocalId = (): string =>
+  `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-const getCurrentTimestamp = (): string => {
-  return new Date().toISOString();
-};
+const getCurrentTimestamp = (): string => new Date().toISOString();
 
 const getRiceGrams = (portion: number): number => {
   const riceData = RICE_PORTIONS.find((r) => r.value === portion);
@@ -129,11 +126,7 @@ const loadFromStorage = async <T>(key: string): Promise<T | null> => {
     const data = await AsyncStorage.getItem(key);
     return data ? JSON.parse(data) : null;
   } catch (error) {
-    if (error instanceof Error) {
-      console.error(`[MealOfflineAPI] Failed to load ${key}:`, error.message);
-    } else {
-      console.error(`[MealOfflineAPI] Failed to load ${key}:`, error);
-    }
+    console.error(`[MealOfflineAPI] Failed to load ${key}:`, error);
     return null;
   }
 };
@@ -154,44 +147,82 @@ const removeFromStorage = async (key: string): Promise<void> => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Meal Metadata Helpers
-// ---------------------------------------------------------------------------
-
 const initializeMealMetadata = (): MealMetadata => {
   const now = getCurrentTimestamp();
-  return {
-    ricePortion: 1,
-    createdAt: now,
-    updatedAt: now,
-  };
+  return { ricePortion: 1, createdAt: now, updatedAt: now };
 };
 
 // ---------------------------------------------------------------------------
-// PUBLIC API - Meal Offline Operations
+// PUBLIC API
 // ---------------------------------------------------------------------------
 
 export class MealOfflineAPI {
+
+  // =========================================================================
+  // FOOD CATALOG (v2.2 — dynamic from Appwrite)
+  // =========================================================================
+
+  /**
+   * Save food catalog to AsyncStorage (called after fetching from Appwrite)
+   */
+  static async saveFoodCatalog(catalog: FoodCatalog): Promise<void> {
+    foodCatalogCache = catalog;
+    await saveToStorage(STORAGE_KEYS.FOOD_CATALOG, catalog);
+    console.log(`[MealOfflineAPI] ✅ Food catalog saved (${Object.keys(catalog).length} items)`);
+  }
+
+  /**
+   * Build catalog from Appwrite food documents and save to cache.
+   * 
+   * @param docs Array of Appwrite food docs with { $id, foodName, category }
+   */
+  static async buildAndSaveCatalog(
+    docs: Array<{ $id: string; foodName: string; category: string }>
+  ): Promise<FoodCatalog> {
+    const catalog = buildCatalogFromDocs(docs);
+    await this.saveFoodCatalog(catalog);
+    return catalog;
+  }
+
+  /**
+   * Get food catalog (from memory → AsyncStorage)
+   */
+  static async getFoodCatalog(): Promise<FoodCatalog | null> {
+    if (foodCatalogCache && Object.keys(foodCatalogCache).length > 0) {
+      return foodCatalogCache;
+    }
+
+    const stored = await loadFromStorage<FoodCatalog>(STORAGE_KEYS.FOOD_CATALOG);
+    if (stored) {
+      foodCatalogCache = stored;
+    }
+    return foodCatalogCache;
+  }
+
+  /**
+   * Get food catalog synchronously (from memory only, for hot path)
+   * Returns null if not loaded yet — use getFoodCatalog() for async load.
+   */
+  static getFoodCatalogSync(): FoodCatalog | null {
+    return foodCatalogCache;
+  }
+
   // =========================================================================
   // CART MANAGEMENT
   // =========================================================================
 
   static async getCart(): Promise<CartItem[]> {
     await delay(100);
-    
     if (cartCache.length === 0) {
       const stored = await loadFromStorage<CartItem[]>(STORAGE_KEYS.CART_ITEMS);
       cartCache = stored || [];
     }
-    
     return [...cartCache];
   }
 
   static async addToCart(id: string, qty: number = 1): Promise<CartItem[]> {
     await delay(100);
-
     const existing = cartCache.find((item) => item.id === id);
-
     if (existing) {
       existing.quantity += qty;
     } else {
@@ -206,13 +237,11 @@ export class MealOfflineAPI {
 
     await saveToStorage(STORAGE_KEYS.CART_ITEMS, cartCache);
     await saveToStorage(STORAGE_KEYS.MEAL_METADATA, mealMetadataCache);
-
     return [...cartCache];
   }
 
   static async updateCartItem(id: string, quantity: number): Promise<CartItem[]> {
     await delay(100);
-
     if (quantity <= 0) {
       cartCache = cartCache.filter((item) => item.id !== id);
     } else {
@@ -265,11 +294,9 @@ export class MealOfflineAPI {
 
   static async updateRicePortion(portion: number): Promise<void> {
     await delay(50);
-
     if (!mealMetadataCache) {
       mealMetadataCache = initializeMealMetadata();
     }
-
     mealMetadataCache.ricePortion = portion;
     mealMetadataCache.updatedAt = getCurrentTimestamp();
 
@@ -279,14 +306,10 @@ export class MealOfflineAPI {
 
   static async getRicePortion(): Promise<number> {
     await delay(50);
-
     if (!mealMetadataCache) {
       mealMetadataCache = await loadFromStorage<MealMetadata>(STORAGE_KEYS.MEAL_METADATA);
     }
-
-    if (mealMetadataCache) {
-      return mealMetadataCache.ricePortion;
-    }
+    if (mealMetadataCache) return mealMetadataCache.ricePortion;
 
     try {
       const stored = await AsyncStorage.getItem(STORAGE_KEYS.RICE_PORTION);
@@ -300,10 +323,7 @@ export class MealOfflineAPI {
     updates: Partial<Omit<MealMetadata, 'createdAt' | 'updatedAt'>>
   ): Promise<MealMetadata> {
     await delay(50);
-
-    if (!mealMetadataCache) {
-      mealMetadataCache = initializeMealMetadata();
-    }
+    if (!mealMetadataCache) mealMetadataCache = initializeMealMetadata();
 
     mealMetadataCache = {
       ...mealMetadataCache,
@@ -317,22 +337,18 @@ export class MealOfflineAPI {
 
   static async getMealMetadata(): Promise<MealMetadata> {
     await delay(50);
-
     if (!mealMetadataCache) {
       mealMetadataCache = await loadFromStorage<MealMetadata>(STORAGE_KEYS.MEAL_METADATA);
     }
-
     if (!mealMetadataCache) {
       mealMetadataCache = initializeMealMetadata();
       await saveToStorage(STORAGE_KEYS.MEAL_METADATA, mealMetadataCache);
     }
-
     return { ...mealMetadataCache };
   }
 
   static async getMealSummary(): Promise<MealSummary> {
     await delay(50);
-
     const items = await this.getCart();
     const metadata = await this.getMealMetadata();
     const riceGrams = getRiceGrams(metadata.ricePortion);
@@ -351,13 +367,12 @@ export class MealOfflineAPI {
   }
 
   // =========================================================================
-  // NUTRITION GOALS & THRESHOLDS (v2.0)
+  // NUTRITION GOALS & THRESHOLDS
   // =========================================================================
 
   static async getNutritionGoals(userId: string): Promise<NutritionGoals | null> {
     const key = `${STORAGE_KEYS.NUTRITION_GOALS_PREFIX}${userId}`;
-    const goals = await loadFromStorage<NutritionGoals>(key);
-    return goals;
+    return await loadFromStorage<NutritionGoals>(key);
   }
 
   static async saveNutritionGoals(userId: string, goals: NutritionGoals): Promise<void> {
@@ -366,14 +381,34 @@ export class MealOfflineAPI {
     console.log('[MealOfflineAPI] Nutrition goals saved offline');
   }
 
-  static async getWeeklyInsights(
+  
+
+  static async getPersonalizedThresholds(userId: string): Promise<PersonalizedThresholds | null> {
+    const key = `${STORAGE_KEYS.THRESHOLDS_PREFIX}${userId}`;
+    const cached = await loadFromStorage<PersonalizedThresholds>(key);
+    if (cached) return cached;
+
+    const thresholds: PersonalizedThresholds = {
+      calories: { min: 1800, max: 2200 },
+      protein: { min: 50, max: 100 },
+      carbs: { min: 200, max: 300 },
+      fats: { min: 50, max: 80 },
+      calculatedAt: new Date().toISOString(),
+      basedOn: { activityLevel: 'moderate', goal: 'maintain' },
+    };
+
+    await saveToStorage(key, thresholds);
+    return thresholds;
+  }
+
+    static async getWeeklyInsights(
     userId: string,
     startDate?: string,
     endDate?: string
   ): Promise<WeeklyInsight> {
     const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate 
-      ? new Date(startDate) 
+    const start = startDate
+      ? new Date(startDate)
       : new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     const allScans = await this.getAllLocalScans();
@@ -388,6 +423,9 @@ export class MealOfflineAPI {
     const totalFats = scans.reduce((sum, s) => sum + s.fats, 0);
     const mealsCount = scans.length;
 
+    // ✅ v2.3: Count balanced meals
+    const balancedMealsCount = scans.filter(scan => isMealBalanced(scan)).length;
+
     return {
       totalCalories,
       avgCalories: mealsCount > 0 ? Math.round(totalCalories / mealsCount) : 0,
@@ -395,39 +433,54 @@ export class MealOfflineAPI {
       totalCarbs,
       totalFats,
       mealsCount,
+      balancedMealsCount,
     };
-  }
-
-  static async getPersonalizedThresholds(userId: string): Promise<PersonalizedThresholds | null> {
-    const key = `${STORAGE_KEYS.THRESHOLDS_PREFIX}${userId}`;
-    const cached = await loadFromStorage<PersonalizedThresholds>(key);
-    
-    if (cached) {
-      return cached;
-    }
-
-    const thresholds: PersonalizedThresholds = {
-      calories: { min: 1800, max: 2200 },
-      protein: { min: 50, max: 100 },
-      carbs: { min: 200, max: 300 },
-      fats: { min: 50, max: 80 },
-      calculatedAt: new Date().toISOString(),
-      basedOn: {
-        activityLevel: 'moderate',
-        goal: 'maintain',
-      },
-    };
-
-    await saveToStorage(key, thresholds);
-    return thresholds;
   }
 
   static async savePersonalizedThresholds(
-    userId: string, 
+    userId: string,
     thresholds: PersonalizedThresholds
   ): Promise<void> {
     const key = `${STORAGE_KEYS.THRESHOLDS_PREFIX}${userId}`;
     await saveToStorage(key, thresholds);
+  }
+
+  // =========================================================================
+  // NUTRITION CALCULATION — delegates to NutritionCalculator
+  // =========================================================================
+
+  /**
+   * Calculate nutrition from cart + rice.
+   * Uses cached food catalog for ID → category mapping.
+   */
+  static async calculateMealNutrition(items: CartItem[], ricePortion: number): Promise<{
+    calories: number;
+    protein: number;
+    carbs: number;
+    fats: number;
+  }> {
+    const catalog = await this.getFoodCatalog();
+    const result = NutritionCalculator.calculateFromCart(items, ricePortion, catalog);
+    return result.totalNutrition;
+  }
+
+  /**
+   * Full calculation with per-food breakdown + vitamin/mineral info.
+   */
+  static async calculateMealNutritionFull(
+    items: CartItem[],
+    ricePortion: number
+  ): Promise<MealNutritionResult> {
+    const catalog = await this.getFoodCatalog();
+    return NutritionCalculator.calculateFromCart(items, ricePortion, catalog);
+  }
+
+  /**
+   * Quick calorie estimate for preview UI.
+   */
+  static async estimateCalories(items: CartItem[], ricePortion: number): Promise<number> {
+    const catalog = await this.getFoodCatalog();
+    return NutritionCalculator.estimateCaloriesFromCart(items, ricePortion, catalog);
   }
 
   // =========================================================================
@@ -436,37 +489,24 @@ export class MealOfflineAPI {
 
   static async prepareNutritionAnalysisPayload(): Promise<NutritionAnalysisPayload> {
     await delay(100);
-
     const items = await this.getCart();
     const metadata = await this.getMealMetadata();
-
-    return {
-      items,
-      ricePortion: metadata.ricePortion,
-      metadata,
-    };
+    return { items, ricePortion: metadata.ricePortion, metadata };
   }
 
   static async prepareAnalyzeMealRequest(): Promise<AnalyzeMealRequest> {
     const items = await this.getCart();
     const metadata = await this.getMealMetadata();
     const riceGrams = getRiceGrams(metadata.ricePortion);
-
-    return {
-      items,
-      ricePortion: metadata.ricePortion,
-      riceGrams,
-      metadata,
-    };
+    return { items, ricePortion: metadata.ricePortion, riceGrams, metadata };
   }
 
   // =========================================================================
-  // PENDING QUEUE MANAGEMENT
+  // PENDING QUEUE
   // =========================================================================
 
   static async addToPendingScans(scanData: NutritionScan, mealData: AnalyzeMealRequest): Promise<void> {
     const pending = await loadFromStorage<PendingScan[]>(STORAGE_KEYS.PENDING_SCANS) || [];
-    
     pending.push({
       localId: generateLocalId(),
       scanData,
@@ -474,7 +514,6 @@ export class MealOfflineAPI {
       createdAt: getCurrentTimestamp(),
       attempts: 0,
     });
-
     await saveToStorage(STORAGE_KEYS.PENDING_SCANS, pending);
   }
 
@@ -484,8 +523,7 @@ export class MealOfflineAPI {
 
   static async removePendingScan(localId: string): Promise<void> {
     const pending = await this.getPendingScans();
-    const filtered = pending.filter(scan => scan.localId !== localId);
-    await saveToStorage(STORAGE_KEYS.PENDING_SCANS, filtered);
+    await saveToStorage(STORAGE_KEYS.PENDING_SCANS, pending.filter(s => s.localId !== localId));
   }
 
   static async getPendingPhotos(): Promise<PendingPhoto[]> {
@@ -494,61 +532,6 @@ export class MealOfflineAPI {
 
   static async getPendingAdvice(): Promise<PendingAdvice[]> {
     return await loadFromStorage<PendingAdvice[]>(STORAGE_KEYS.PENDING_FEEDBACK) || [];
-  }
-
-  // =========================================================================
-  // LOCAL NUTRITION CALCULATION
-  // =========================================================================
-
-  static async calculateMealNutrition(items: CartItem[], ricePortion: number): Promise<{
-    calories: number;
-    protein: number;
-    carbs: number;
-    fats: number;
-  }> {
-    let totalCalories = 0;
-    let totalProtein = 0;
-    let totalCarbs = 0;
-    let totalFats = 0;
-
-    for (const item of items) {
-      const nutritionData = await this.getFoodNutritionData(item.id);
-      
-      if (nutritionData) {
-        const servings = item.quantity;
-        const gramsPerServing = nutritionData.servingSize;
-        
-        totalCalories += (nutritionData.caloriesPer100g * gramsPerServing * servings) / 100;
-        totalProtein += (nutritionData.proteinPer100g * gramsPerServing * servings) / 100;
-        totalCarbs += (nutritionData.carbsPer100g * gramsPerServing * servings) / 100;
-        totalFats += (nutritionData.fatsPer100g * gramsPerServing * servings) / 100;
-      }
-    }
-
-    const riceGrams = getRiceGrams(ricePortion);
-    if (riceGrams > 0) {
-      totalCalories += (130 * riceGrams) / 100;
-      totalProtein += (2.7 * riceGrams) / 100;
-      totalCarbs += (28 * riceGrams) / 100;
-      totalFats += (0.3 * riceGrams) / 100;
-    }
-
-    return {
-      calories: Math.round(totalCalories),
-      protein: Math.round(totalProtein * 10) / 10,
-      carbs: Math.round(totalCarbs * 10) / 10,
-      fats: Math.round(totalFats * 10) / 10,
-    };
-  }
-
-  static async getFoodNutritionData(foodId: string): Promise<FoodNutritionData | null> {
-    const db = await loadFromStorage<Record<string, FoodNutritionData>>(STORAGE_KEYS.FOOD_NUTRITION_DB);
-    return db ? db[foodId] || null : null;
-  }
-
-  static async estimateCalories(items: CartItem[], ricePortion: number): Promise<number> {
-    const nutrition = await this.calculateMealNutrition(items, ricePortion);
-    return nutrition.calories;
   }
 
   // =========================================================================
@@ -591,44 +574,40 @@ export class MealOfflineAPI {
       scans.sort((a, b) => a.calories - b.calories);
     }
 
-    if (limit && limit > 0) {
-      scans = scans.slice(0, limit);
-    }
-
+    if (limit && limit > 0) scans = scans.slice(0, limit);
     return scans;
   }
 
   static async getLocalScanById(id: string): Promise<LocalNutritionScan | null> {
     const scans = await this.getAllLocalScans();
-    return scans.find(scan => scan.id === id || scan.localId === id) || null;
+    return scans.find(s => s.id === id || s.localId === id) || null;
   }
 
   static async getLocalScansByDateRange(filter: DateRangeFilter): Promise<LocalNutritionScan[]> {
     const scans = await this.getAllLocalScans();
-    const startDate = new Date(filter.startDate);
-    const endDate = new Date(filter.endDate);
-
-    return scans.filter(scan => {
-      const scanDate = new Date(scan.date);
-      return scanDate >= startDate && scanDate <= endDate;
+    const start = new Date(filter.startDate);
+    const end = new Date(filter.endDate);
+    return scans.filter(s => {
+      const d = new Date(s.date);
+      return d >= start && d <= end;
     });
   }
 
-  static async getTodayLocalScans(): Promise<LocalNutritionScan[]> {
-    const today = new Date();
-    const startOfDay = new Date(today.setHours(0, 0, 0, 0)).toISOString();
-    const endOfDay = new Date(today.setHours(23, 59, 59, 999)).toISOString();
+static async getTodayLocalScans(): Promise<LocalNutritionScan[]> {
+    const allScans = await this.getAllLocalScans();
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-    return this.getLocalScansByDateRange({
-      startDate: startOfDay,
-      endDate: endOfDay,
+    return allScans.filter(s => {
+      const scanDate = new Date(s.lastModified);
+      return scanDate >= startOfDay && scanDate <= endOfDay;
     });
-  }
+}
 
   static async updateLocalScan(id: string, updates: Partial<NutritionScan>): Promise<void> {
     const scans = await this.getAllLocalScans();
     const scan = scans.find(s => s.id === id || s.localId === id);
-
     if (scan) {
       Object.assign(scan, updates);
       scan.lastModified = getCurrentTimestamp();
@@ -640,29 +619,25 @@ export class MealOfflineAPI {
   static async deleteLocalScan(id: string): Promise<void> {
     const scans = await this.getAllLocalScans();
     const filtered = scans.filter(s => s.id !== id && s.localId !== id);
-    
     await saveToStorage(STORAGE_KEYS.COMPLETED_SCANS, filtered);
     completedScansCache = filtered;
     await this.updateScansIndex();
   }
 
   // =========================================================================
-  // SYNC STATUS TRACKING
+  // SYNC STATUS
   // =========================================================================
 
   static async markScanAsSynced(localId: string, serverId: string): Promise<void> {
     const scans = await this.getAllLocalScans();
     const scan = scans.find(s => s.localId === localId);
-
     if (scan) {
       scan.serverId = serverId;
       scan.isSynced = true;
       scan.syncedAt = getCurrentTimestamp();
-      
       await saveToStorage(STORAGE_KEYS.COMPLETED_SCANS, scans);
       completedScansCache = scans;
     }
-
     await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC_TIME, getCurrentTimestamp());
   }
 
@@ -671,7 +646,6 @@ export class MealOfflineAPI {
     const pendingPhotos = await this.getPendingPhotos();
     const PendingAdvice = await this.getPendingAdvice();
     const lastSyncTime = await AsyncStorage.getItem(STORAGE_KEYS.LAST_SYNC_TIME);
-
     return {
       lastSyncTime,
       pendingScansCount: pendingScans.length,
@@ -682,29 +656,19 @@ export class MealOfflineAPI {
 
   static async getUnsyncedScansCount(): Promise<number> {
     const scans = await this.getAllLocalScans();
-    return scans.filter(scan => !scan.isSynced).length;
+    return scans.filter(s => !s.isSynced).length;
   }
 
   // =========================================================================
-  // HISTORICAL SYNC METHODS (v2.0)
+  // HISTORICAL SYNC
   // =========================================================================
 
   static async getUnsyncedScans(limit?: number): Promise<LocalNutritionScan[]> {
     try {
       const allScans = await this.getAllLocalScans();
-      const unsyncedScans = allScans.filter(scan => !scan.isSynced);
-      
-      unsyncedScans.sort((a, b) => {
-        const dateA = new Date(a.date).getTime();
-        const dateB = new Date(b.date).getTime();
-        return dateA - dateB;
-      });
-      
-      if (limit && limit > 0) {
-        return unsyncedScans.slice(0, limit);
-      }
-      
-      return unsyncedScans;
+      const unsynced = allScans.filter(s => !s.isSynced);
+      unsynced.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      return limit && limit > 0 ? unsynced.slice(0, limit) : unsynced;
     } catch (error) {
       console.error('[MealOfflineAPI] Failed to get unsynced scans:', error);
       return [];
@@ -716,10 +680,8 @@ export class MealOfflineAPI {
   ): Promise<void> {
     try {
       const scans = await this.getAllLocalScans();
-      
       for (const { localId, serverId } of syncedScans) {
         const scan = scans.find(s => s.localId === localId || s.id === localId);
-        
         if (scan) {
           scan.serverId = serverId;
           scan.isSynced = true;
@@ -727,15 +689,9 @@ export class MealOfflineAPI {
           scan.lastModified = getCurrentTimestamp();
         }
       }
-      
       await saveToStorage(STORAGE_KEYS.COMPLETED_SCANS, scans);
       completedScansCache = scans;
-      
-      await AsyncStorage.setItem(
-        STORAGE_KEYS.LAST_SYNC_TIME,
-        getCurrentTimestamp()
-      );
-      
+      await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC_TIME, getCurrentTimestamp());
       console.log(`[MealOfflineAPI] ✅ Marked ${syncedScans.length} scans as synced`);
     } catch (error) {
       console.error('[MealOfflineAPI] Failed to mark batch as synced:', error);
@@ -751,10 +707,9 @@ export class MealOfflineAPI {
   }> {
     try {
       const allScans = await this.getAllLocalScans();
-      const unsyncedScans = allScans.filter(scan => !scan.isSynced);
+      const unsyncedScans = allScans.filter(s => !s.isSynced);
       const lastSyncTime = await AsyncStorage.getItem(STORAGE_KEYS.LAST_SYNC_TIME);
       const pendingScans = await this.getPendingScans();
-      
       return {
         totalScans: allScans.length,
         unsyncedScans: unsyncedScans.length,
@@ -763,27 +718,18 @@ export class MealOfflineAPI {
       };
     } catch (error) {
       console.error('[MealOfflineAPI] Failed to get historical sync status:', error);
-      return {
-        totalScans: 0,
-        unsyncedScans: 0,
-        lastSyncTime: null,
-        lastBatchSize: 0,
-      };
+      return { totalScans: 0, unsyncedScans: 0, lastSyncTime: null, lastBatchSize: 0 };
     }
   }
 
-  static async getScansByDateRange(
-    startDate: string,
-    endDate: string
-  ): Promise<LocalNutritionScan[]> {
+  static async getScansByDateRange(startDate: string, endDate: string): Promise<LocalNutritionScan[]> {
     try {
       const allScans = await this.getAllLocalScans();
       const start = new Date(startDate);
       const end = new Date(endDate);
-      
-      return allScans.filter(scan => {
-        const scanDate = new Date(scan.date);
-        return scanDate >= start && scanDate <= end;
+      return allScans.filter(s => {
+        const d = new Date(s.date);
+        return d >= start && d <= end;
       });
     } catch (error) {
       console.error('[MealOfflineAPI] Failed to get scans by date range:', error);
@@ -794,24 +740,21 @@ export class MealOfflineAPI {
   static async clearOldSyncedScans(daysOld: number = 30): Promise<number> {
     try {
       const allScans = await this.getAllLocalScans();
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-      
-      const toKeep = allScans.filter(scan => {
-        if (!scan.isSynced) return true;
-        const scanDate = new Date(scan.date);
-        return scanDate > cutoffDate;
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - daysOld);
+
+      const toKeep = allScans.filter(s => {
+        if (!s.isSynced) return true;
+        return new Date(s.date) > cutoff;
       });
-      
-      const removedCount = allScans.length - toKeep.length;
-      
-      if (removedCount > 0) {
+
+      const removed = allScans.length - toKeep.length;
+      if (removed > 0) {
         await saveToStorage(STORAGE_KEYS.COMPLETED_SCANS, toKeep);
         completedScansCache = toKeep;
-        console.log(`[MealOfflineAPI] ✅ Cleared ${removedCount} old synced scans`);
+        console.log(`[MealOfflineAPI] ✅ Cleared ${removed} old synced scans`);
       }
-      
-      return removedCount;
+      return removed;
     } catch (error) {
       console.error('[MealOfflineAPI] Failed to clear old scans:', error);
       return 0;
@@ -826,44 +769,40 @@ export class MealOfflineAPI {
     pendingPhotos: number;
     oldestUnsyncedDate: string | null;
     newestUnsyncedDate: string | null;
+    foodCatalogSize: number;
   }> {
     try {
       const allScans = await this.getAllLocalScans();
-      const unsyncedScans = allScans.filter(s => !s.isSynced);
+      const unsynced = allScans.filter(s => !s.isSynced);
       const pendingScans = await this.getPendingScans();
       const pendingPhotos = await this.getPendingPhotos();
-      
+      const catalog = await this.getFoodCatalog();
+
       let oldestDate: string | null = null;
       let newestDate: string | null = null;
-      
-      if (unsyncedScans.length > 0) {
-        const dates = unsyncedScans
-          .map(s => new Date(s.date).getTime())
-          .sort((a, b) => a - b);
-        
+      if (unsynced.length > 0) {
+        const dates = unsynced.map(s => new Date(s.date).getTime()).sort((a, b) => a - b);
         oldestDate = new Date(dates[0]).toISOString();
         newestDate = new Date(dates[dates.length - 1]).toISOString();
       }
-      
+
       return {
         totalScans: allScans.length,
         syncedScans: allScans.filter(s => s.isSynced).length,
-        unsyncedScans: unsyncedScans.length,
+        unsyncedScans: unsynced.length,
         pendingScans: pendingScans.length,
         pendingPhotos: pendingPhotos.length,
         oldestUnsyncedDate: oldestDate,
         newestUnsyncedDate: newestDate,
+        foodCatalogSize: catalog ? Object.keys(catalog).length : 0,
       };
     } catch (error) {
       console.error('[MealOfflineAPI] Failed to get sync diagnostics:', error);
       return {
-        totalScans: 0,
-        syncedScans: 0,
-        unsyncedScans: 0,
-        pendingScans: 0,
-        pendingPhotos: 0,
-        oldestUnsyncedDate: null,
-        newestUnsyncedDate: null,
+        totalScans: 0, syncedScans: 0, unsyncedScans: 0,
+        pendingScans: 0, pendingPhotos: 0,
+        oldestUnsyncedDate: null, newestUnsyncedDate: null,
+        foodCatalogSize: 0,
       };
     }
   }
@@ -873,24 +812,14 @@ export class MealOfflineAPI {
   // =========================================================================
 
   static validateMealData(items: CartItem[], metadata: MealMetadata): boolean {
-    if (!items || items.length === 0) {
-      return false;
-    }
-
-    if (!metadata || typeof metadata.ricePortion !== 'number') {
-      return false;
-    }
-
+    if (!items || items.length === 0) return false;
+    if (!metadata || typeof metadata.ricePortion !== 'number') return false;
     return true;
   }
 
   static async prepareScanForSync(): Promise<AnalyzeMealRequest | null> {
     const request = await this.prepareAnalyzeMealRequest();
-    
-    if (!this.validateMealData(request.items, request.metadata)) {
-      return null;
-    }
-
+    if (!this.validateMealData(request.items, request.metadata)) return null;
     return request;
   }
 
@@ -899,8 +828,8 @@ export class MealOfflineAPI {
   // =========================================================================
 
   private static async updateScansIndex(): Promise<void> {
-    const scans = completedScansCache.length > 0 
-      ? completedScansCache 
+    const scans = completedScansCache.length > 0
+      ? completedScansCache
       : await loadFromStorage<LocalNutritionScan[]>(STORAGE_KEYS.COMPLETED_SCANS) || [];
 
     const index = {
@@ -909,7 +838,6 @@ export class MealOfflineAPI {
       lastSync: await AsyncStorage.getItem(STORAGE_KEYS.LAST_SYNC_TIME),
       lastModified: getCurrentTimestamp(),
     };
-
     await saveToStorage(STORAGE_KEYS.SCANS_INDEX, index);
   }
 
@@ -917,22 +845,24 @@ export class MealOfflineAPI {
     cartCache = await loadFromStorage<CartItem[]>(STORAGE_KEYS.CART_ITEMS) || [];
     mealMetadataCache = await loadFromStorage<MealMetadata>(STORAGE_KEYS.MEAL_METADATA);
     completedScansCache = await loadFromStorage<LocalNutritionScan[]>(STORAGE_KEYS.COMPLETED_SCANS) || [];
+    foodCatalogCache = await loadFromStorage<FoodCatalog>(STORAGE_KEYS.FOOD_CATALOG);
 
     if (!mealMetadataCache && cartCache.length > 0) {
       mealMetadataCache = initializeMealMetadata();
       await saveToStorage(STORAGE_KEYS.MEAL_METADATA, mealMetadataCache);
     }
+
+    console.log(
+      `[MealOfflineAPI] ✅ Initialized — catalog: ${foodCatalogCache ? Object.keys(foodCatalogCache).length : 0} items`
+    );
   }
 
   static clearCache(): void {
     cartCache = [];
     mealMetadataCache = null;
     completedScansCache = [];
+    foodCatalogCache = null;
   }
 }
 
-// Export types
-export type {
-  SyncStatus,
-  FoodNutritionData,
-};
+export type { SyncStatus };

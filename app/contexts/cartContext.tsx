@@ -1,22 +1,18 @@
 /**
- * cartContext.tsx (REFACTORED - Clean Wrapper)
+ * cartContext.tsx (v2.1 - WeeklyInsight + AI Summary + Photo Analysis)
  * ---------------------------------------------------------------------------
  * Global cart state via React Context.
  * 
- * REFACTORED: Clean wrapper around mealService
- * • ✅ Hanya mengelola React state
- * • ✅ Semua business logic di mealService
- * • ✅ Konsisten dengan pattern authService
- * • ✅ Minimal, readable, maintainable
- * 
- * Pattern:
- * - Context hanya untuk React state management
- * - Service untuk business logic & data operations
- * - Clean separation of concerns
+ * v2.1 Changes:
+ * • ✅ weeklyInsight state with proper balancedMealsCount
+ * • ✅ aiSummary from OpenRouter
+ * • ✅ todayScans + todayStats
+ * • ✅ Photo analysis state (isAnalyzing, analysisResult)
+ * • ✅ refreshWeeklyInsight action
  * ---------------------------------------------------------------------------
  */
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { CartItem } from '@/app/types/food';
 import {
   MealMetadata,
@@ -24,13 +20,17 @@ import {
   AnalyzeMealResponse,
   NutritionScan,
   MealSummary,
+  WeeklyInsight,
+  TodayStatistics,
+  AIPhotoAnalysisResult,
 } from '@/app/types/meal';
 
-// Import MEAL SERVICE (single source of truth)
 import mealService from '@/app/services/meal/mealService';
+import { calculateWeeklyInsight, calculateTodayStatistics } from '@/app/utils/nutritionUtils';
+import openRouterService from '@/app/services/openrouter/openRouterServices';
 
 // ---------------------------------------------------------------------------
-// Context Type - Interface TIDAK BERUBAH
+// Context Type
 // ---------------------------------------------------------------------------
 interface CartContextType {
   // ========== Core Cart State ==========
@@ -51,6 +51,18 @@ interface CartContextType {
   isLoadingScans: boolean;
   lastSubmittedScan: NutritionScan | null;
 
+  // ========== Weekly Insight (v2.1) ==========
+  weeklyInsight: WeeklyInsight;
+  aiSummary: string | null;
+  isSummaryLoading: boolean;
+
+  // ========== Today Statistics (v2.1) ==========
+  todayStats: TodayStatistics;
+
+  // ========== Photo Analysis (v2.1) ==========
+  isAnalyzing: boolean;
+  analysisResult: AIPhotoAnalysisResult | null;
+
   // ========== Core Cart Actions ==========
   addToCart: (id: string, qty?: number) => Promise<void>;
   updateQuantity: (id: string, qty: number) => Promise<void>;
@@ -69,21 +81,55 @@ interface CartContextType {
   refreshTodayScans: () => Promise<void>;
   getScanById: (id: string) => Promise<NutritionScan | null>;
   deleteScan: (id: string) => Promise<void>;
+
+  // ========== Weekly Insight Actions (v2.1) ==========
+  refreshWeeklyInsight: () => Promise<void>;
+
+  // ========== Photo Analysis Actions (v2.1) ==========
+  analyzePhoto: (photoUri: string) => Promise<AIPhotoAnalysisResult>;
+  savePhotoAnalysis: (result: AIPhotoAnalysisResult) => Promise<NutritionScan | null>;
+  clearAnalysisResult: () => void;
 }
 
 // ---------------------------------------------------------------------------
-// Context instance
+// Default Values
+// ---------------------------------------------------------------------------
+
+const DEFAULT_WEEKLY_INSIGHT: WeeklyInsight = {
+  totalCalories: 0,
+  avgCalories: 0,
+  totalProtein: 0,
+  totalCarbs: 0,
+  totalFats: 0,
+  mealsCount: 0,
+  balancedMealsCount: 0,
+};
+
+const DEFAULT_TODAY_STATS: TodayStatistics = {
+  totalCalories: 0,
+  totalProtein: 0,
+  totalCarbs: 0,
+  totalFats: 0,
+  mealsCount: 0,
+  balancedMealsCount: 0,
+  scans: [],
+};
+
+// ---------------------------------------------------------------------------
+// Context
 // ---------------------------------------------------------------------------
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
-// Provider - REFACTORED sebagai clean wrapper
+// Provider
 // ---------------------------------------------------------------------------
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // ========== React State (UI layer only) ==========
+  // ========== Core State ==========
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const lastInsightHash = useRef<string>('');
 
   const [ricePortion, setRicePortionState] = useState<number>(200);
   const [mealMetadata, setMealMetadata] = useState<MealMetadata | null>(null);
@@ -94,12 +140,21 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoadingScans, setIsLoadingScans] = useState(false);
   const [lastSubmittedScan, setLastSubmittedScan] = useState<NutritionScan | null>(null);
 
-  // ========== INITIALIZATION - Load via mealService ==========
+  // ========== v2.1 State ==========
+  const [weeklyInsight, setWeeklyInsight] = useState<WeeklyInsight>(DEFAULT_WEEKLY_INSIGHT);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [isSummaryLoading, setIsSummaryLoading] = useState(false);
+  const [todayStats, setTodayStats] = useState<TodayStatistics>(DEFAULT_TODAY_STATS);
+
+  // Photo Analysis
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<AIPhotoAnalysisResult | null>(null);
+
+  // ========== INITIALIZATION ==========
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
       try {
-        // Load cart data
         const [cartData, portion, metadata, summary] = await Promise.all([
           mealService.getCart(),
           mealService.getRicePortion(),
@@ -112,7 +167,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setMealMetadata(metadata);
         setMealSummary(summary);
 
-        // Load scans in background (non-blocking)
+        // Load scans + insights in background
         loadScansInBackground();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Gagal memuat data');
@@ -123,7 +178,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     init();
   }, []);
 
-  // ========== HELPER: Load Scans ==========
+  // ========== HELPER: Load Scans + Calculate Stats ==========
   const loadScansInBackground = async () => {
     try {
       setIsLoadingScans(true);
@@ -135,6 +190,18 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setRecentScans(recent);
       setTodayScans(today);
+
+      // Calculate weekly insight from recent scans (use all for weekly calc)
+      const allScans = await mealService.getAllScans('date-desc', 100);
+      const insight = calculateWeeklyInsight(allScans);
+      setWeeklyInsight(insight);
+
+      // Calculate today statistics
+      const todayStat = calculateTodayStatistics(today);
+      setTodayStats(todayStat);
+
+      // Generate AI summary in background (non-blocking)
+      generateAISummary(insight);
     } catch (err) {
       console.error('[CartContext] Failed to load scans:', err);
     } finally {
@@ -142,7 +209,35 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // ========== HELPER: Generate AI Summary ==========
+  const generateAISummary = async (insight: WeeklyInsight) => {
+  if (insight.mealsCount === 0) {
+    setAiSummary(null);
+    return;
+  }
+
+  // Simple hash to detect data change
+  const hash = `${insight.mealsCount}_${insight.totalCalories}_${insight.balancedMealsCount}`;
   
+  // Skip if data hasn't changed
+  if (hash === lastInsightHash.current && aiSummary) {
+    return;
+  }
+
+  try {
+    setIsSummaryLoading(true);
+    const result = await openRouterService.generateWeeklySummary(insight);
+    if (result.success) {
+      setAiSummary(result.summary);
+      lastInsightHash.current = hash;
+    }
+  } catch (err) {
+    console.warn('[CartContext] AI summary failed:', err);
+  } finally {
+    setIsSummaryLoading(false);
+  }
+};
+
   // ========== HELPER: Refresh UI State ==========
   const refreshUIState = useCallback(async () => {
     try {
@@ -158,13 +253,9 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   // ===========================================================================
-  // CART ACTIONS - Clean wrappers around mealService
+  // CART ACTIONS
   // ===========================================================================
 
-  /**
-   * ✅ Add to cart
-   * Calls: mealService.addToCart()
-   */
   const addToCart = useCallback(async (id: string, qty: number = 1) => {
     setIsLoading(true);
     setError(null);
@@ -173,17 +264,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCart(updatedCart);
       await refreshUIState();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal menambah item';
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Gagal menambah item');
     } finally {
       setIsLoading(false);
     }
   }, [refreshUIState]);
 
-  /**
-   * ✅ Update quantity
-   * Calls: mealService.updateCartItem()
-   */
   const updateQuantity = useCallback(async (id: string, qty: number) => {
     setIsLoading(true);
     setError(null);
@@ -192,17 +278,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCart(updatedCart);
       await refreshUIState();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal update quantity';
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Gagal update quantity');
     } finally {
       setIsLoading(false);
     }
   }, [refreshUIState]);
 
-  /**
-   * ✅ Remove from cart
-   * Calls: mealService.removeFromCart()
-   */
   const removeFromCart = useCallback(async (id: string) => {
     setIsLoading(true);
     setError(null);
@@ -211,26 +292,17 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCart(updatedCart);
       await refreshUIState();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal hapus item';
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Gagal hapus item');
     } finally {
       setIsLoading(false);
     }
   }, [refreshUIState]);
 
-  /**
-   * ✅ Clear cart
-   * Calls: mealService.clearCart()
-   */
   const clearCart = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-
     try {
-      // Call service
       await mealService.clearCart();
-
-      // Update UI state
       React.startTransition(() => {
         setCart([]);
         setRicePortionState(200);
@@ -240,26 +312,19 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal mengosongkan cart';
       setError(msg);
-
-      // Rollback - reload from service
+      // Rollback
       try {
         const [cartData, portion, metadata, summary] = await Promise.all([
-          mealService.getCart(),
-          mealService.getRicePortion(),
-          mealService.getMealMetadata(),
-          mealService.getMealSummary(),
+          mealService.getCart(), mealService.getRicePortion(),
+          mealService.getMealMetadata(), mealService.getMealSummary(),
         ]);
-
         React.startTransition(() => {
-          setCart(cartData);
-          setRicePortionState(portion);
-          setMealMetadata(metadata);
-          setMealSummary(summary);
+          setCart(cartData); setRicePortionState(portion);
+          setMealMetadata(metadata); setMealSummary(summary);
         });
       } catch (rollbackErr) {
         console.error('[CartContext] Rollback failed:', rollbackErr);
       }
-
       throw err;
     } finally {
       setIsLoading(false);
@@ -267,13 +332,9 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   // ===========================================================================
-  // NUTRITION ANALYSIS ACTIONS - Clean wrappers
+  // NUTRITION ANALYSIS ACTIONS
   // ===========================================================================
 
-  /**
-   * ✅ Set rice portion
-   * Calls: mealService.updateRicePortion()
-   */
   const setRicePortion = useCallback(async (portion: number) => {
     setIsLoading(true);
     setError(null);
@@ -282,17 +343,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setRicePortionState(portion);
       await refreshUIState();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal update porsi nasi';
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Gagal update porsi nasi');
     } finally {
       setIsLoading(false);
     }
   }, [refreshUIState]);
 
-  /**
-   * ✅ Update metadata
-   * Calls: mealService.updateMealMetadata()
-   */
   const updateMetadata = useCallback(
     async (updates: Partial<Omit<MealMetadata, 'createdAt' | 'updatedAt'>>) => {
       setIsLoading(true);
@@ -300,24 +356,16 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const updated = await mealService.updateMealMetadata(updates);
         setMealMetadata(updated);
-
-        // Refresh summary
         const summary = await mealService.getMealSummary();
         setMealSummary(summary);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Gagal update metadata';
-        setError(msg);
+        setError(err instanceof Error ? err.message : 'Gagal update metadata');
       } finally {
         setIsLoading(false);
       }
-    },
-    []
+    }, []
   );
 
-  /**
-   * ✅ Refresh meal summary
-   * Calls: mealService.getMealSummary()
-   */
   const refreshMealSummary = useCallback(async () => {
     try {
       const summary = await mealService.getMealSummary();
@@ -327,67 +375,42 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  /**
-   * ✅ Get analysis payload
-   * Calls: mealService.getAnalysisPayload()
-   */
   const getAnalysisPayload = useCallback(async (): Promise<NutritionAnalysisPayload> => {
     return await mealService.getAnalysisPayload();
   }, []);
 
-  /**
-   * ✅ Submit analysis
-   * Calls: mealService.submitAnalysis()
-   * 
-   * Clean wrapper - all business logic in service
-   */
   const submitAnalysis = useCallback(async (): Promise<AnalyzeMealResponse> => {
     setIsLoading(true);
     setError(null);
-
     try {
-      // Service handles everything: validation, calculation, save, sync, clear
       const response = await mealService.submitAnalysis();
-
       if (response.success) {
-        // Update UI state
         React.startTransition(() => {
           setCart([]);
           setRicePortionState(200);
           setMealMetadata(null);
           setMealSummary(null);
-          if (response.scan) {
-            setLastSubmittedScan(response.scan);
-          }
+          if (response.scan) setLastSubmittedScan(response.scan);
         });
-
-        // Refresh scans in background
+        // Refresh all data
         loadScansInBackground();
       } else {
         setError(response.message || 'Submit failed');
       }
-
       return response;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal submit analisis';
       setError(msg);
-      return {
-        success: false,
-        message: msg,
-      };
+      return { success: false, message: msg };
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   // ===========================================================================
-  // NUTRITION SCANS ACTIONS - Clean wrappers
+  // SCANS ACTIONS
   // ===========================================================================
 
-  /**
-   * ✅ Refresh scans
-   * Calls: mealService.getAllScans()
-   */
   const refreshScans = useCallback(async () => {
     setIsLoadingScans(true);
     try {
@@ -401,56 +424,44 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  /**
-   * ✅ Refresh today scans
-   * Calls: mealService.getTodayScans()
-   */
   const refreshTodayScans = useCallback(async () => {
     setIsLoadingScans(true);
     try {
       const scans = await mealService.getTodayScans();
       setTodayScans(scans);
+      setTodayStats(calculateTodayStatistics(scans));
     } catch (err) {
       console.error('[CartContext] Failed to refresh today scans:', err);
-      setError(err instanceof Error ? err.message : 'Gagal refresh today scans');
     } finally {
       setIsLoadingScans(false);
     }
   }, []);
 
-  /**
-   * ✅ Get scan by ID
-   * Calls: mealService.getScanById()
-   */
   const getScanById = useCallback(async (id: string): Promise<NutritionScan | null> => {
     setIsLoadingScans(true);
     try {
       return await mealService.getScanById(id);
     } catch (err) {
       console.error('[CartContext] Failed to get scan:', err);
-      setError(err instanceof Error ? err.message : 'Gagal get scan');
       return null;
     } finally {
       setIsLoadingScans(false);
     }
   }, []);
 
-  /**
-   * ✅ Delete scan
-   * Calls: mealService.deleteScan()
-   */
   const deleteScan = useCallback(async (id: string) => {
     setIsLoadingScans(true);
     try {
       await mealService.deleteScan(id);
-
-      // Update local state
       setRecentScans(prev => prev.filter(s => s.id !== id));
       setTodayScans(prev => prev.filter(s => s.id !== id));
+      if (lastSubmittedScan?.id === id) setLastSubmittedScan(null);
 
-      if (lastSubmittedScan?.id === id) {
-        setLastSubmittedScan(null);
-      }
+      // Recalculate stats
+      const allScans = await mealService.getAllScans('date-desc', 100);
+      setWeeklyInsight(calculateWeeklyInsight(allScans));
+      const today = await mealService.getTodayScans();
+      setTodayStats(calculateTodayStatistics(today));
     } catch (err) {
       console.error('[CartContext] Failed to delete scan:', err);
       setError(err instanceof Error ? err.message : 'Gagal delete scan');
@@ -461,55 +472,142 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [lastSubmittedScan]);
 
   // ===========================================================================
+  // WEEKLY INSIGHT ACTIONS (v2.1)
+  // ===========================================================================
+
+  const refreshWeeklyInsight = useCallback(async () => {
+    try {
+      setIsLoadingScans(true);
+      const allScans = await mealService.getAllScans('date-desc', 100);
+      const insight = calculateWeeklyInsight(allScans);
+      setWeeklyInsight(insight);
+
+      // Refresh today stats too
+      const today = await mealService.getTodayScans();
+      setTodayScans(today);
+      setTodayStats(calculateTodayStatistics(today));
+
+      // Regenerate AI summary
+      generateAISummary(insight);
+    } catch (err) {
+      console.error('[CartContext] Failed to refresh weekly insight:', err);
+    } finally {
+      setIsLoadingScans(false);
+    }
+  }, []);
+
+  // ===========================================================================
+  // PHOTO ANALYSIS ACTIONS (v2.1)
+  // ===========================================================================
+
+  const analyzePhoto = useCallback(async (photoUri: string): Promise<AIPhotoAnalysisResult> => {
+    setIsAnalyzing(true);
+    setAnalysisResult(null);
+    try {
+      const result = await openRouterService.analyzePhoto(photoUri);
+      setAnalysisResult(result);
+      return result;
+    } catch (err) {
+      const errorResult: AIPhotoAnalysisResult = {
+        success: false,
+        foods: [],
+        totalNutrition: { calories: 0, protein: 0, carbs: 0, fats: 0 },
+        mealDescription: '',
+        error: err instanceof Error ? err.message : 'Analisis gagal',
+      };
+      setAnalysisResult(errorResult);
+      return errorResult;
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, []);
+
+  const savePhotoAnalysis = useCallback(async (
+    result: AIPhotoAnalysisResult
+  ): Promise<NutritionScan | null> => {
+    if (!result.success) return null;
+
+    try {
+      const scan: NutritionScan = {
+        id: `photo_${Date.now()}`,
+        foodName: result.mealDescription || result.foods.map(f => f.name).join(', ') || 'Foto Makanan',
+        date: new Date().toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric',
+        }),
+        time: new Date().toLocaleTimeString('en-US', {
+          hour: '2-digit', minute: '2-digit',
+        }),
+        calories: result.totalNutrition.calories,
+        protein: result.totalNutrition.protein,
+        carbs: result.totalNutrition.carbs,
+        fats: result.totalNutrition.fats,
+      };
+
+      // Save via mealService (saves to local + queues sync)
+      const { MealOfflineAPI } = await import('@/app/services/meal/mealOfflineAPI');
+      await MealOfflineAPI.saveCompletedScan(scan);
+
+      setLastSubmittedScan(scan);
+
+      // Refresh all data
+      loadScansInBackground();
+
+      return scan;
+    } catch (err) {
+      console.error('[CartContext] Failed to save photo analysis:', err);
+      return null;
+    }
+  }, []);
+
+  const clearAnalysisResult = useCallback(() => {
+    setAnalysisResult(null);
+  }, []);
+
+  // ===========================================================================
   // DERIVED VALUES
   // ===========================================================================
-  
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
   const isEmpty = cart.length === 0;
 
   // ===========================================================================
-  // RENDER - Interface TIDAK BERUBAH
+  // RENDER
   // ===========================================================================
-  
   return (
     <CartContext.Provider
       value={{
         // Core state
-        cart,
-        totalItems,
-        isLoading,
-        error,
+        cart, totalItems, isLoading, error,
 
         // Extended state
-        ricePortion,
-        mealMetadata,
-        mealSummary,
-        isEmpty,
+        ricePortion, mealMetadata, mealSummary, isEmpty,
 
-        // Nutrition scans state
-        recentScans,
-        todayScans,
-        isLoadingScans,
-        lastSubmittedScan,
+        // Scans state
+        recentScans, todayScans, isLoadingScans, lastSubmittedScan,
+
+        // Weekly Insight (v2.1)
+        weeklyInsight, aiSummary, isSummaryLoading,
+
+        // Today Statistics (v2.1)
+        todayStats,
+
+        // Photo Analysis (v2.1)
+        isAnalyzing, analysisResult,
 
         // Core actions
-        addToCart,
-        updateQuantity,
-        removeFromCart,
-        clearCart,
+        addToCart, updateQuantity, removeFromCart, clearCart,
 
         // Extended actions
-        setRicePortion,
-        updateMetadata,
-        refreshMealSummary,
-        getAnalysisPayload,
-        submitAnalysis,
+        setRicePortion, updateMetadata, refreshMealSummary,
+        getAnalysisPayload, submitAnalysis,
 
-        // Nutrition scans actions
-        refreshScans,
-        refreshTodayScans,
-        getScanById,
-        deleteScan,
+        // Scans actions
+        refreshScans, refreshTodayScans, getScanById, deleteScan,
+
+        // Weekly Insight actions (v2.1)
+        refreshWeeklyInsight,
+
+        // Photo Analysis actions (v2.1)
+        analyzePhoto, savePhotoAnalysis, clearAnalysisResult,
       }}
     >
       {children}
@@ -518,17 +616,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 };
 
 // ---------------------------------------------------------------------------
-// Hook - Interface TIDAK BERUBAH
+// Hook
 // ---------------------------------------------------------------------------
-
-/**
- * ✅ Use cart hook
- * 
- * Usage in components:
- * ```tsx
- * const { cart, addToCart, submitAnalysis } = useCart();
- * ```
- */
 export const useCart = (): CartContextType => {
   const ctx = useContext(CartContext);
   if (!ctx) {

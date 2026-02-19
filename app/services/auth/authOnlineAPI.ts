@@ -78,14 +78,31 @@ const createAuthResponse = async (session: Models.Session): Promise<AuthResponse
 // ---------------------------------------------------------------------------
 // Auth Online API (FIXED)
 // ---------------------------------------------------------------------------
-
+/**
+ * Safely delete any existing session before creating a new one
+ */
+const clearExistingSession = async (): Promise<void> => {
+  try {
+    await account.deleteSession('current');
+    console.log('[authOnlineAPI] Cleared existing session');
+  } catch (error: any) {
+    // 401 = no active session, which is fine
+    if (error?.code !== 401) {
+      console.warn('[authOnlineAPI] Could not clear session:', error?.message);
+    }
+  }
+};
 export const authOnlineAPI = {
+  
   /**
    * Register a new user
    */
   register: async (data: RegisterRequest): Promise<AuthResponse> => {
     try {
       console.log('[authOnlineAPI] Registering new user...');
+
+      // Clear any existing session first
+      await clearExistingSession();
 
       // Create Appwrite Account
       const userId = generateId();
@@ -98,7 +115,7 @@ export const authOnlineAPI = {
 
       console.log('[authOnlineAPI] Account created, logging in...');
 
-      // Auto login after registration
+      // Now create session (no conflict since we cleared above)
       const session = await account.createEmailPasswordSession(
         data.email,
         data.password
@@ -125,7 +142,6 @@ export const authOnlineAPI = {
         console.log('[authOnlineAPI] User profile created in database');
       } catch (dbError) {
         console.error('[authOnlineAPI] Failed to create user profile:', dbError);
-        // Continue anyway, profile can be created later
       }
 
       const authResponse = await createAuthResponse(session);
@@ -145,7 +161,9 @@ export const authOnlineAPI = {
     try {
       console.log('[authOnlineAPI] Logging in user...');
 
-      // Create session
+      // Clear any existing session first
+      await clearExistingSession();
+
       const session = await account.createEmailPasswordSession(
         data.email,
         data.password

@@ -1,14 +1,12 @@
 /**
- * mealService.ts (FIXED - SyncManager Integration + Complete Offline Support) v1
+ * mealService.ts (v2.1 - WeeklyInsight balancedMealsCount + No Mock Data)
  * ---------------------------------------------------------------------------
  * TRUE OFFLINE-FIRST - STRICTLY following meal.ts types.
  * 
- * FIXES APPLIED:
- * • ✅ Weekly insights with offline fallback
- * • ✅ Nutrition goals with offline fallback
- * • ✅ Personalized thresholds with offline fallback
- * • ✅ Proper userId handling
- * • ✅ All TODO implementations completed
+ * v2.1 Changes:
+ * • ✅ Weekly insights includes balancedMealsCount
+ * • ✅ Removed all mock/hardcoded menu item references
+ * • ✅ All food data comes from Appwrite via FoodCatalog
  * ---------------------------------------------------------------------------
  */
 
@@ -26,17 +24,11 @@ import {
   AnalyzeMealResponse,
 } from '@/app/types/meal';
 
-// Import OFFLINE API (primary)
 import { MealOfflineAPI, LocalNutritionScan } from '@/app/services/meal/mealOfflineAPI';
-
-// Import ONLINE API (for read-only/hybrid operations)
 import { MealOnlineAPI, PersonalizedThresholds } from '@/app/services/meal/mealOnlineAPI';
-
-// Import SYNC
 import { getSyncManager } from '@/app/services/sync/syncManager';
-
-// ✅ FIXED: Import auth to get userId
 import authService from '@/app/services/auth/authService';
+import { isMealBalanced } from '@/app/utils/nutritionUtils';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,7 +41,7 @@ interface MealServiceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Meal Service Class (FIXED)
+// Meal Service Class (v2.1)
 // ---------------------------------------------------------------------------
 
 class MealService {
@@ -60,16 +52,12 @@ class MealService {
   };
 
   private isOnline: boolean = false;
-  private currentUserId: string | null = null;
 
   constructor() {
     this.setupNetworkListener();
     this.initializeService();
   }
 
-  /**
-   * Setup network listener
-   */
   private setupNetworkListener(): void {
     NetInfo.addEventListener(state => {
       const wasOffline = !this.isOnline;
@@ -83,53 +71,23 @@ class MealService {
     });
   }
 
-  /**
-   * Initialize service
-   */
   private async initializeService(): Promise<void> {
     try {
       await MealOfflineAPI.initializeOfflineAPI();
-      
-      // Get current user ID
-      await this.updateCurrentUserId();
-      
       console.log('[MealService] ✅ Service initialized');
     } catch (error) {
       console.error('[MealService] Initialization failed:', error);
     }
   }
 
-  /**
-   * ✅ NEW: Update current user ID from auth service
-   */
-  private async updateCurrentUserId(): Promise<void> {
-    try {
-      const authData = await authService.getCurrentUser();
-      this.currentUserId = authData?.user.id || null;
-    } catch (error) {
-      console.error('[MealService] Failed to get user ID:', error);
-      this.currentUserId = null;
-    }
-  }
-
-  /**
-   * ✅ NEW: Get current user ID (with auto-update)
-   */
   private async getCurrentUserId(): Promise<string> {
-    if (!this.currentUserId) {
-      await this.updateCurrentUserId();
-    }
-    
-    if (!this.currentUserId) {
+    const authData = await authService.getCurrentUser();
+    if (!authData?.user?.id) {
       throw new Error('User not authenticated');
     }
-    
-    return this.currentUserId;
+    return authData.user.id;
   }
 
-  /**
-   * Check network status
-   */
   private async checkNetwork(): Promise<boolean> {
     const state = await NetInfo.fetch();
     this.isOnline = state.isConnected ?? false;
@@ -140,9 +98,6 @@ class MealService {
   // CART OPERATIONS (OFFLINE-FIRST)
   // ===========================================================================
 
-  /**
-   * Get cart items (always local)
-   */
   async getCart(): Promise<CartItem[]> {
     try {
       return await MealOfflineAPI.getCart();
@@ -152,9 +107,6 @@ class MealService {
     }
   }
 
-  /**
-   * Add item to cart (local-only)
-   */
   async addToCart(id: string, qty: number = 1): Promise<CartItem[]> {
     try {
       const updatedCart = await MealOfflineAPI.addToCart(id, qty);
@@ -166,9 +118,6 @@ class MealService {
     }
   }
 
-  /**
-   * Update cart item quantity (local-only)
-   */
   async updateCartItem(id: string, quantity: number): Promise<CartItem[]> {
     try {
       const updatedCart = await MealOfflineAPI.updateCartItem(id, quantity);
@@ -180,9 +129,6 @@ class MealService {
     }
   }
 
-  /**
-   * Remove item from cart (local-only)
-   */
   async removeFromCart(id: string): Promise<CartItem[]> {
     try {
       const updatedCart = await MealOfflineAPI.removeFromCart(id);
@@ -194,9 +140,6 @@ class MealService {
     }
   }
 
-  /**
-   * Clear cart (local-only)
-   */
   async clearCart(): Promise<CartItem[]> {
     try {
       const emptyCart = await MealOfflineAPI.clearCart();
@@ -209,24 +152,18 @@ class MealService {
   }
 
   // ===========================================================================
-  // MEAL METADATA OPERATIONS (OFFLINE-FIRST)
+  // MEAL METADATA OPERATIONS
   // ===========================================================================
 
-  /**
-   * Get rice portion (always local)
-   */
   async getRicePortion(): Promise<number> {
     try {
       return await MealOfflineAPI.getRicePortion();
     } catch (error) {
       console.error('[MealService] Failed to get rice portion:', error);
-      return 1; // Default
+      return 1;
     }
   }
 
-  /**
-   * Update rice portion (local-only)
-   */
   async updateRicePortion(portion: number): Promise<void> {
     try {
       await MealOfflineAPI.updateRicePortion(portion);
@@ -237,9 +174,6 @@ class MealService {
     }
   }
 
-  /**
-   * Get meal metadata (always local)
-   */
   async getMealMetadata(): Promise<MealMetadata> {
     try {
       return await MealOfflineAPI.getMealMetadata();
@@ -249,9 +183,6 @@ class MealService {
     }
   }
 
-  /**
-   * Update meal metadata (local-only)
-   */
   async updateMealMetadata(
     updates: Partial<Omit<MealMetadata, 'createdAt' | 'updatedAt'>>
   ): Promise<MealMetadata> {
@@ -265,9 +196,6 @@ class MealService {
     }
   }
 
-  /**
-   * Get meal summary (always local)
-   */
   async getMealSummary(): Promise<MealSummary> {
     try {
       return await MealOfflineAPI.getMealSummary();
@@ -278,46 +206,26 @@ class MealService {
   }
 
   // ===========================================================================
-  // MEAL ANALYSIS & SUBMISSION (OFFLINE-FIRST WITH SYNC)
+  // MEAL ANALYSIS & SUBMISSION
   // ===========================================================================
 
-  /**
-   * Submit meal analysis
-   * 
-   * Flow:
-   * 1. Validate meal data
-   * 2. Calculate nutrition offline (instant feedback)
-   * 3. Create local scan
-   * 4. Queue for sync via SyncManager (background)
-   * 5. Clear cart
-   */
   async submitAnalysis(): Promise<AnalyzeMealResponse> {
     try {
-      // ✅ FIXED: Get userId
       const userId = await this.getCurrentUserId();
-
-      // 1. Prepare & validate data
       const mealData = await MealOfflineAPI.prepareScanForSync();
 
       if (!mealData) {
-        return {
-          success: false,
-          message: 'Data tidak valid untuk dianalisis',
-        };
+        return { success: false, message: 'Data tidak valid untuk dianalisis' };
       }
 
-      // ✅ FIXED: Add userId to metadata
       mealData.metadata.userId = userId;
 
-      // 2. Calculate nutrition OFFLINE (instant result)
+      // Calculate nutrition OFFLINE
       const nutrition = this.config.offlineCalculation
-        ? await MealOfflineAPI.calculateMealNutrition(
-            mealData.items,
-            mealData.ricePortion
-          )
+        ? await MealOfflineAPI.calculateMealNutrition(mealData.items, mealData.ricePortion)
         : { calories: 0, protein: 0, carbs: 0, fats: 0 };
 
-      // 3. Create local scan (available immediately)
+      // Create local scan
       const localScan: NutritionScan = {
         id: `local_${Date.now()}`,
         userId,
@@ -325,13 +233,10 @@ class MealService {
           ? `${mealData.metadata.mealType.charAt(0).toUpperCase() + mealData.metadata.mealType.slice(1)}`
           : 'My Meal',
         date: new Date().toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          year: 'numeric' 
+          month: 'short', day: 'numeric', year: 'numeric',
         }),
         time: new Date().toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
+          hour: '2-digit', minute: '2-digit',
         }),
         calories: nutrition.calories,
         protein: nutrition.protein,
@@ -339,11 +244,10 @@ class MealService {
         fats: nutrition.fats,
       };
 
-      // Save to local history
       await MealOfflineAPI.saveCompletedScan(localScan);
       console.log('[MealService] ✅ Scan saved locally');
 
-      // 4. Queue for sync with server (background)
+      // Queue for sync
       if (this.config.syncOnSubmit) {
         try {
           const syncManager = getSyncManager();
@@ -354,11 +258,10 @@ class MealService {
           });
           console.log('[MealService] 📋 Meal analysis queued for sync');
         } catch (syncErr) {
-          console.warn('[MealService] Failed to queue for sync, will retry later:', syncErr);
+          console.warn('[MealService] Failed to queue for sync:', syncErr);
         }
       }
 
-      // 5. Clear cart
       await MealOfflineAPI.clearCart();
       console.log('[MealService] ✅ Cart cleared after submission');
 
@@ -379,9 +282,6 @@ class MealService {
     }
   }
 
-  /**
-   * Get analysis payload
-   */
   async getAnalysisPayload(): Promise<NutritionAnalysisPayload> {
     try {
       return await MealOfflineAPI.prepareNutritionAnalysisPayload();
@@ -391,9 +291,6 @@ class MealService {
     }
   }
 
-  /**
-   * Estimate calories (quick calculation for preview)
-   */
   async estimateCalories(): Promise<number> {
     try {
       const cart = await this.getCart();
@@ -406,12 +303,9 @@ class MealService {
   }
 
   // ===========================================================================
-  // SCANS HISTORY (OFFLINE-FIRST)
+  // SCANS HISTORY
   // ===========================================================================
 
-  /**
-   * Get all local scans (always local)
-   */
   async getAllScans(sortBy?: ScanSortOption, limit?: number): Promise<NutritionScan[]> {
     try {
       const scans = await MealOfflineAPI.getAllLocalScans(sortBy, limit);
@@ -422,9 +316,6 @@ class MealService {
     }
   }
 
-  /**
-   * Get scan by ID (always local)
-   */
   async getScanById(id: string): Promise<NutritionScan | null> {
     try {
       const scan = await MealOfflineAPI.getLocalScanById(id);
@@ -435,9 +326,6 @@ class MealService {
     }
   }
 
-  /**
-   * Get scans by date range (always local)
-   */
   async getScansByDateRange(filter: DateRangeFilter): Promise<NutritionScan[]> {
     try {
       const scans = await MealOfflineAPI.getLocalScansByDateRange(filter);
@@ -448,9 +336,6 @@ class MealService {
     }
   }
 
-  /**
-   * Get today's scans (always local)
-   */
   async getTodayScans(): Promise<NutritionScan[]> {
     try {
       const scans = await MealOfflineAPI.getTodayLocalScans();
@@ -461,27 +346,16 @@ class MealService {
     }
   }
 
-  /**
-   * Update scan
-   * 
-   * Flow:
-   * 1. Update locally (MealOfflineAPI.updateLocalScan)
-   * 2. Queue for sync (SyncManager.sync)
-   */
   async updateScan(id: string, updates: Partial<NutritionScan>): Promise<void> {
     try {
-      // 1. Update locally first
       await MealOfflineAPI.updateLocalScan(id, updates);
       console.log('[MealService] ✅ Scan updated locally');
 
-      // 2. Queue for background sync
       if (this.config.autoSync) {
         try {
           const syncManager = getSyncManager();
           await syncManager.sync('meal', {
-            action: 'updateScan',
-            scanId: id,
-            updates,
+            action: 'updateScan', scanId: id, updates,
           });
           console.log('[MealService] 📋 Scan update queued for sync');
         } catch (syncErr) {
@@ -494,26 +368,16 @@ class MealService {
     }
   }
 
-  /**
-   * Delete scan
-   * 
-   * Flow:
-   * 1. Delete locally (MealOfflineAPI.deleteLocalScan)
-   * 2. Queue deletion notification (SyncManager.sync)
-   */
   async deleteScan(id: string): Promise<void> {
     try {
-      // 1. Delete locally first
       await MealOfflineAPI.deleteLocalScan(id);
       console.log('[MealService] ✅ Scan deleted locally');
 
-      // 2. Queue deletion notification
       if (this.config.autoSync) {
         try {
           const syncManager = getSyncManager();
           await syncManager.sync('meal', {
-            action: 'deleteScan',
-            scanId: id,
+            action: 'deleteScan', scanId: id,
           });
           console.log('[MealService] 📋 Scan deletion queued for sync');
         } catch (syncErr) {
@@ -527,15 +391,11 @@ class MealService {
   }
 
   // ===========================================================================
-  // INSIGHTS & ANALYTICS (FIXED - HYBRID with Offline Fallback)
+  // INSIGHTS & ANALYTICS (v2.1 - with balancedMealsCount)
   // ===========================================================================
 
   /**
-   * ✅ FIXED: Get weekly insights
-   * 
-   * Flow:
-   * 1. Try online if available (MealOnlineAPI.getWeeklyInsights)
-   * 2. Fallback to local calculation (MealOfflineAPI.getWeeklyInsights)
+   * ✅ v2.1: Get weekly insights with balancedMealsCount
    */
   async getWeeklyInsights(
     startDate?: string,
@@ -544,18 +404,18 @@ class MealService {
     try {
       const userId = await this.getCurrentUserId();
 
-      // Try online first if available
+      // Try online first
       if (this.isOnline) {
         try {
           const insights = await MealOnlineAPI.getWeeklyInsights(userId, startDate, endDate);
           console.log('[MealService] ✅ Weekly insights from server');
           return insights;
         } catch (onlineError) {
-          console.warn('[MealService] Failed to get online insights, using local:', onlineError);
+          console.warn('[MealService] Online insights failed, using local:', onlineError);
         }
       }
 
-      // ✅ FIXED: Fallback to local calculation
+      // Fallback to local
       const insights = await MealOfflineAPI.getWeeklyInsights(userId, startDate, endDate);
       console.log('[MealService] ✅ Weekly insights calculated locally');
       return insights;
@@ -565,68 +425,46 @@ class MealService {
     }
   }
 
-  /**
-   * ✅ FIXED: Get personalized thresholds (HYBRID with cache)
-   */
   async getPersonalizedThresholds(): Promise<PersonalizedThresholds | null> {
     try {
       const userId = await this.getCurrentUserId();
 
-      // Try online first
       if (this.isOnline) {
         try {
           const thresholds = await MealOnlineAPI.getPersonalizedThresholds(userId);
-          console.log('[MealService] ✅ Personalized thresholds from server');
-          
-          // ✅ FIXED: Cache for offline use
           if (thresholds) {
             await MealOfflineAPI.savePersonalizedThresholds(userId, thresholds);
           }
-          
           return thresholds;
         } catch (onlineError) {
-          console.warn('[MealService] Failed to get online thresholds:', onlineError);
+          console.warn('[MealService] Online thresholds failed:', onlineError);
         }
       }
 
-      // ✅ FIXED: Fallback to cached/default
-      const cached = await MealOfflineAPI.getPersonalizedThresholds(userId);
-      console.log('[MealService] ✅ Personalized thresholds from cache');
-      return cached;
+      return await MealOfflineAPI.getPersonalizedThresholds(userId);
     } catch (error) {
       console.error('[MealService] Failed to get personalized thresholds:', error);
       return null;
     }
   }
 
-  /**
-   * ✅ FIXED: Get nutrition goals (HYBRID with cache)
-   */
   async getNutritionGoals(): Promise<NutritionGoals | null> {
     try {
       const userId = await this.getCurrentUserId();
 
-      // Try online first
       if (this.isOnline) {
         try {
           const goals = await MealOnlineAPI.getNutritionGoals(userId);
-          console.log('[MealService] ✅ Nutrition goals from server');
-          
-          // ✅ FIXED: Cache for offline use
           if (goals) {
             await MealOfflineAPI.saveNutritionGoals(userId, goals);
           }
-          
           return goals;
         } catch (onlineError) {
-          console.warn('[MealService] Failed to get online goals:', onlineError);
+          console.warn('[MealService] Online goals failed:', onlineError);
         }
       }
 
-      // ✅ FIXED: Fallback to cached
-      const cached = await MealOfflineAPI.getNutritionGoals(userId);
-      console.log('[MealService] ✅ Nutrition goals from cache');
-      return cached;
+      return await MealOfflineAPI.getNutritionGoals(userId);
     } catch (error) {
       console.error('[MealService] Failed to get nutrition goals:', error);
       return null;
@@ -634,12 +472,9 @@ class MealService {
   }
 
   // ===========================================================================
-  // SYNC OPERATIONS (Using SyncManager)
+  // SYNC OPERATIONS
   // ===========================================================================
 
-  /**
-   * Manually sync pending data
-   */
   async syncPendingData(): Promise<{
     success: boolean;
     syncedCount: number;
@@ -647,13 +482,8 @@ class MealService {
   }> {
     try {
       const isOnline = await this.checkNetwork();
-
       if (!isOnline) {
-        return {
-          success: false,
-          syncedCount: 0,
-          errors: ['Device is offline'],
-        };
+        return { success: false, syncedCount: 0, errors: ['Device is offline'] };
       }
 
       const syncManager = getSyncManager();
@@ -667,16 +497,12 @@ class MealService {
     } catch (error) {
       console.error('[MealService] Failed to sync pending data:', error);
       return {
-        success: false,
-        syncedCount: 0,
+        success: false, syncedCount: 0,
         errors: [error instanceof Error ? error.message : 'Unknown error'],
       };
     }
   }
 
-  /**
-   * Get pending items count
-   */
   async getPendingCount(): Promise<number> {
     try {
       const syncManager = getSyncManager();
@@ -687,21 +513,11 @@ class MealService {
     }
   }
 
-  /**
-   * Force sync all
-   */
-  async forceSyncAll(): Promise<{
-    success: boolean;
-    message: string;
-  }> {
+  async forceSyncAll(): Promise<{ success: boolean; message: string }> {
     try {
       const isOnline = await this.checkNetwork();
-
       if (!isOnline) {
-        return {
-          success: false,
-          message: 'Device is offline - cannot sync',
-        };
+        return { success: false, message: 'Device is offline' };
       }
 
       const syncManager = getSyncManager();
@@ -726,9 +542,6 @@ class MealService {
   // STATUS & DIAGNOSTICS
   // ===========================================================================
 
-  /**
-   * Get sync status
-   */
   async getSyncStatus(): Promise<{
     isOnline: boolean;
     pendingCount: number;
@@ -747,39 +560,22 @@ class MealService {
       console.warn('[MealService] Could not get SyncManager status:', error);
     }
 
-    return {
-      isOnline,
-      pendingCount,
-      unsyncedScans,
-      syncManagerStatus,
-    };
+    return { isOnline, pendingCount, unsyncedScans, syncManagerStatus };
   }
 
-  /**
-   * Get sync diagnostics
-   */
- 
-  /**
-   * Pause sync
-   */
   pauseSync(): void {
     try {
       const syncManager = getSyncManager();
       syncManager.pauseSync();
-      console.log('[MealService] Sync paused');
     } catch (error) {
       console.error('[MealService] Failed to pause sync:', error);
     }
   }
 
-  /**
-   * Resume sync
-   */
   resumeSync(): void {
     try {
       const syncManager = getSyncManager();
       syncManager.resumeSync();
-      console.log('[MealService] Sync resumed');
     } catch (error) {
       console.error('[MealService] Failed to resume sync:', error);
     }
@@ -789,198 +585,138 @@ class MealService {
   // CONFIGURATION
   // ===========================================================================
 
-  /**
-   * Update config
-   */
   setConfig(config: Partial<MealServiceConfig>): void {
     this.config = { ...this.config, ...config };
     console.log('[MealService] Config updated:', this.config);
   }
 
-  /**
-   * Get current config
-   */
   getConfig(): MealServiceConfig {
     return { ...this.config };
   }
 
-  /**
-   * Clear all local data
-   */
   async clearAllData(): Promise<void> {
     await MealOfflineAPI.clearCart();
     console.log('[MealService] Cart data cleared');
   }
 
-  /**
-   * Clear cache
-   */
   clearCache(): void {
     MealOfflineAPI.clearCache();
     console.log('[MealService] Cache cleared');
   }
 
-/**
- * Sync historical data to server
- */
-async syncHistoricalData(options?: {
-  maxScans?: number;
-  startDate?: string;
-  endDate?: string;
-}): Promise<{
-  success: boolean;
-  syncedCount: number;
-  failedCount: number;
-  message: string;
-}> {
-  try {
-    const isOnline = await this.checkNetwork();
-    if (!isOnline) {
+  // ===========================================================================
+  // HISTORICAL SYNC
+  // ===========================================================================
+
+  async syncHistoricalData(options?: {
+    maxScans?: number;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<{
+    success: boolean; syncedCount: number; failedCount: number; message: string;
+  }> {
+    try {
+      const isOnline = await this.checkNetwork();
+      if (!isOnline) {
+        return { success: false, syncedCount: 0, failedCount: 0, message: 'Device is offline' };
+      }
+
+      let scans = await MealOfflineAPI.getUnsyncedScans(options?.maxScans);
+      
+      if (options?.startDate && options?.endDate) {
+        scans = await MealOfflineAPI.getScansByDateRange(options.startDate, options.endDate);
+        scans = scans.filter(s => !s.isSynced);
+      }
+      
+      if (scans.length === 0) {
+        return { success: true, syncedCount: 0, failedCount: 0, message: 'No scans to sync' };
+      }
+
+      const syncManager = getSyncManager();
+      await syncManager.sync('meal', { action: 'sendHistoricalData', scans });
+
       return {
-        success: false,
-        syncedCount: 0,
-        failedCount: 0,
-        message: 'Device is offline - cannot sync',
+        success: true, syncedCount: 0, failedCount: 0,
+        message: `Syncing ${scans.length} scans in background...`,
+      };
+    } catch (error) {
+      console.error('[MealService] Historical sync failed:', error);
+      return {
+        success: false, syncedCount: 0, failedCount: 0,
+        message: error instanceof Error ? error.message : 'Sync failed',
       };
     }
+  }
 
-    let scans = await MealOfflineAPI.getUnsyncedScans(options?.maxScans);
-    
-    if (options?.startDate && options?.endDate) {
-      scans = await MealOfflineAPI.getScansByDateRange(
-        options.startDate,
-        options.endDate
-      );
-      scans = scans.filter(s => !s.isSynced);
-    }
-    
-    if (scans.length === 0) {
+  async getHistoricalSyncStatus(): Promise<{
+    totalScans: number; unsyncedScans: number; lastSyncTime: string | null; canSync: boolean;
+  }> {
+    try {
+      const status = await MealOfflineAPI.getHistoricalSyncStatus();
+      const isOnline = await this.checkNetwork();
       return {
-        success: true,
-        syncedCount: 0,
-        failedCount: 0,
-        message: 'No scans to sync',
+        totalScans: status.totalScans,
+        unsyncedScans: status.unsyncedScans,
+        lastSyncTime: status.lastSyncTime,
+        canSync: isOnline && status.unsyncedScans > 0,
+      };
+    } catch (error) {
+      console.error('[MealService] Failed to get historical sync status:', error);
+      return { totalScans: 0, unsyncedScans: 0, lastSyncTime: null, canSync: false };
+    }
+  }
+
+  async getSyncDiagnostics(): Promise<any> {
+    try {
+      const offlineDiagnostics = await MealOfflineAPI.getSyncDiagnostics();
+      const syncManager = getSyncManager();
+      const syncManagerStatus = await syncManager.getStatus();
+      
+      return {
+        offline: offlineDiagnostics,
+        syncManager: {
+          isOnline: syncManagerStatus.isOnline,
+          isProcessing: syncManagerStatus.isProcessing,
+          queueStats: syncManagerStatus.queueStats,
+        },
+        summary: {
+          totalScans: offlineDiagnostics.totalScans,
+          syncedScans: offlineDiagnostics.syncedScans,
+          unsyncedScans: offlineDiagnostics.unsyncedScans,
+          pendingInQueue: syncManagerStatus.queueStats.byType.meal || 0,
+          healthStatus: 
+            offlineDiagnostics.unsyncedScans > 50 ? 'critical' : 
+            offlineDiagnostics.unsyncedScans > 10 ? 'warning' : 'healthy',
+        },
+      };
+    } catch (error) {
+      console.error('[MealService] Failed to get sync diagnostics:', error);
+      return null;
+    }
+  }
+
+  async cleanupOldSyncedScans(daysOld: number = 30): Promise<{
+    success: boolean; removedCount: number; message: string;
+  }> {
+    try {
+      const removedCount = await MealOfflineAPI.clearOldSyncedScans(daysOld);
+      return {
+        success: true, removedCount,
+        message: `Removed ${removedCount} old synced scans`,
+      };
+    } catch (error) {
+      console.error('[MealService] Cleanup failed:', error);
+      return {
+        success: false, removedCount: 0,
+        message: error instanceof Error ? error.message : 'Cleanup failed',
       };
     }
-
-    console.log(`[MealService] Starting historical sync of ${scans.length} scans...`);
-
-    const syncManager = getSyncManager();
-    await syncManager.sync('meal', {
-      action: 'sendHistoricalData',
-      scans: scans,
-    });
-
-    return {
-      success: true,
-      syncedCount: 0,
-      failedCount: 0,
-      message: `Syncing ${scans.length} scans in background...`,
-    };
-  } catch (error) {
-    console.error('[MealService] Historical sync failed:', error);
-    return {
-      success: false,
-      syncedCount: 0,
-      failedCount: 0,
-      message: error instanceof Error ? error.message : 'Sync failed',
-    };
   }
-}
-
-/**
- * Get historical sync status
- */
-async getHistoricalSyncStatus(): Promise<{
-  totalScans: number;
-  unsyncedScans: number;
-  lastSyncTime: string | null;
-  canSync: boolean;
-}> {
-  try {
-    const status = await MealOfflineAPI.getHistoricalSyncStatus();
-    const isOnline = await this.checkNetwork();
-    
-    return {
-      totalScans: status.totalScans,
-      unsyncedScans: status.unsyncedScans,
-      lastSyncTime: status.lastSyncTime,
-      canSync: isOnline && status.unsyncedScans > 0,
-    };
-  } catch (error) {
-    console.error('[MealService] Failed to get historical sync status:', error);
-    return {
-      totalScans: 0,
-      unsyncedScans: 0,
-      lastSyncTime: null,
-      canSync: false,
-    };
-  }
-}
-
-/**
- * Get comprehensive sync diagnostics
- */
-async getSyncDiagnostics(): Promise<any> {
-  try {
-    const offlineDiagnostics = await MealOfflineAPI.getSyncDiagnostics();
-    const syncManager = getSyncManager();
-    const syncManagerStatus = await syncManager.getStatus();
-    
-    return {
-      offline: offlineDiagnostics,
-      syncManager: {
-        isOnline: syncManagerStatus.isOnline,
-        isProcessing: syncManagerStatus.isProcessing,
-        queueStats: syncManagerStatus.queueStats,
-      },
-      summary: {
-        totalScans: offlineDiagnostics.totalScans,
-        syncedScans: offlineDiagnostics.syncedScans,
-        unsyncedScans: offlineDiagnostics.unsyncedScans,
-        pendingInQueue: syncManagerStatus.queueStats.byType.meal || 0,
-        healthStatus: 
-          offlineDiagnostics.unsyncedScans > 50 ? 'critical' : 
-          offlineDiagnostics.unsyncedScans > 10 ? 'warning' : 'healthy',
-      },
-    };
-  } catch (error) {
-    console.error('[MealService] Failed to get sync diagnostics:', error);
-    return null;
-  }
-}
-
-/**
- * Cleanup old synced scans
- */
-async cleanupOldSyncedScans(daysOld: number = 30): Promise<{
-  success: boolean;
-  removedCount: number;
-  message: string;
-}> {
-  try {
-    const removedCount = await MealOfflineAPI.clearOldSyncedScans(daysOld);
-    
-    return {
-      success: true,
-      removedCount,
-      message: `Removed ${removedCount} old synced scans`,
-    };
-  } catch (error) {
-    console.error('[MealService] Cleanup failed:', error);
-    return {
-      success: false,
-      removedCount: 0,
-      message: error instanceof Error ? error.message : 'Cleanup failed',
-    };
-  }
-}
 }
 
 // ---------------------------------------------------------------------------
-// Singleton Instance
+// Singleton
 // ---------------------------------------------------------------------------
 
 const mealService = new MealService();
-
 export default mealService;

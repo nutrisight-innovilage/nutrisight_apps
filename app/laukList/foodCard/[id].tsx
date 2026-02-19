@@ -288,16 +288,23 @@ export default function CardScreen() {
           </View>
         </Animated.View>
 
-        {/* ==================== DESCRIPTION ==================== */}
+        {/* ==================== BAHAN MAKANAN ==================== */}
         {foodData.description && (
           <Animated.View entering={FadeInUp.delay(550).duration(500)}>
             <View className="mx-4 mt-6">
-              <Text className="text-base font-bold text-gray-900 mb-2">
-                Deskripsi
-              </Text>
-              <Text className="text-sm text-gray-600 leading-6">
-                {foodData.description}
-              </Text>
+              <View className="flex-row items-center mb-3">
+                <View className="bg-orange-100 rounded-full p-2">
+                  <MaterialIcons name="shopping-basket" size={18} color="#ea580c" />
+                </View>
+                <Text className="text-base font-bold text-gray-900 ml-2">
+                  Bahan Makanan
+                </Text>
+              </View>
+              <View className="bg-orange-50 rounded-2xl p-4 border border-orange-100">
+                <Text className="text-sm text-gray-700 leading-6">
+                  {foodData.description}
+                </Text>
+              </View>
             </View>
           </Animated.View>
         )}

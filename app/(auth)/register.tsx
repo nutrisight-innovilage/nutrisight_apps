@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/app/contexts/authContext';
@@ -26,6 +26,8 @@ export default function RegisterScreen() {
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
     const { register } = useAuth();
 
     const genderOptions: { label: string; value: Gender }[] = [
@@ -41,10 +43,8 @@ export default function RegisterScreen() {
         { label: 'Lansia', value: 'lansia' },
     ];
 
-    // Fungsi untuk mengecek kekuatan password
     const checkPasswordStrength = (pass: string): PasswordStrength => {
         let score = 0;
-        
         if (pass.length >= 10) score++;
         if (pass.length >= 14) score++;
         if (/[a-z]/.test(pass)) score++;
@@ -57,27 +57,15 @@ export default function RegisterScreen() {
         return { score, label: 'Kuat', color: '#10b981' };
     };
 
-    // Validasi password dengan aturan keamanan
     const validatePassword = (pass: string): string | null => {
-        if (pass.length < 10) {
-            return 'Password minimal 10 karakter';
-        }
-        if (!/[a-z]/.test(pass)) {
-            return 'Password harus mengandung huruf kecil';
-        }
-        if (!/[A-Z]/.test(pass)) {
-            return 'Password harus mengandung huruf besar';
-        }
-        if (!/[0-9]/.test(pass)) {
-            return 'Password harus mengandung angka';
-        }
-        if (!/[^a-zA-Z0-9]/.test(pass)) {
-            return 'Password harus mengandung karakter khusus (!@#$%^&*)';
-        }
+        if (pass.length < 10) return 'Password minimal 10 karakter';
+        if (!/[a-z]/.test(pass)) return 'Password harus mengandung huruf kecil';
+        if (!/[A-Z]/.test(pass)) return 'Password harus mengandung huruf besar';
+        if (!/[0-9]/.test(pass)) return 'Password harus mengandung angka';
+        if (!/[^a-zA-Z0-9]/.test(pass)) return 'Password harus mengandung karakter khusus (!@#$%^&*)';
         return null;
     };
 
-    // Validasi email format
     const validateEmail = (email: string): boolean => {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         return emailRegex.test(email);
@@ -86,50 +74,47 @@ export default function RegisterScreen() {
     const passwordStrength = password ? checkPasswordStrength(password) : null;
 
     const handleRegister = async () => {
-        // Validasi semua field terisi
+        setErrorMessage('');
+        setSuccessMessage('');
+
         if (!email || !password || !confirmPassword || !name || !age || !weight || !height || !gender || !role) {
-            Alert.alert('Kesalahan', 'Mohon lengkapi semua kolom');
+            setErrorMessage('Mohon lengkapi semua kolom');
             return;
         }
 
-        // Validasi format email
         if (!validateEmail(email)) {
-            Alert.alert('Kesalahan', 'Format email tidak valid');
+            setErrorMessage('Format email tidak valid');
             return;
         }
 
-        // Validasi kekuatan password
         const passwordError = validatePassword(password);
         if (passwordError) {
-            Alert.alert('Password Tidak Aman', passwordError);
+            setErrorMessage(passwordError);
             return;
         }
 
-        // Validasi password match
         if (password !== confirmPassword) {
-            Alert.alert('Kesalahan', 'Password tidak cocok');
+            setErrorMessage('Password tidak cocok');
             return;
         }
 
-        // Validasi umur
         const ageNum = parseInt(age);
         if (isNaN(ageNum) || ageNum < 1 || ageNum > 150) {
-            Alert.alert('Kesalahan', 'Mohon masukkan umur yang valid (1-150)');
+            setErrorMessage('Mohon masukkan umur yang valid (1-150)');
             return;
         }
 
-        // Validasi berat dan tinggi
         const weightNum = parseFloat(weight);
         const heightNum = parseFloat(height);
         if (isNaN(weightNum) || weightNum < 1 || isNaN(heightNum) || heightNum < 1) {
-            Alert.alert('Kesalahan', 'Mohon masukkan berat dan tinggi yang valid');
+            setErrorMessage('Mohon masukkan berat dan tinggi yang valid');
             return;
         }
 
         setLoading(true);
         try {
             await register({
-                email: email.toLowerCase().trim(), // Normalisasi email
+                email: email.toLowerCase().trim(),
                 password,
                 name: name.trim(),
                 age,
@@ -138,10 +123,10 @@ export default function RegisterScreen() {
                 gender: gender as Gender,
                 role: role as UserRole,
             });
-            Alert.alert('Berhasil', 'Pendaftaran berhasil!');
+            setSuccessMessage('Pendaftaran berhasil!');
             router.replace('/(tabs)');
         } catch (error: any) {
-            Alert.alert('Pendaftaran Gagal', error.message || 'Silakan coba lagi');
+            setErrorMessage(error.message || 'Silakan coba lagi');
         } finally {
             setLoading(false);
         }
@@ -154,6 +139,20 @@ export default function RegisterScreen() {
                     <Text className="text-4xl font-bold text-text-primary mb-2">Buat Akun</Text>
                     <Text className="text-base text-text-secondary mb-8">Lengkapi data Anda untuk mendaftar</Text>
 
+                    {/* Error Message */}
+                    {errorMessage ? (
+                        <View className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
+                            <Text className="text-red-600 text-sm">{errorMessage}</Text>
+                        </View>
+                    ) : null}
+
+                    {/* Success Message */}
+                    {successMessage ? (
+                        <View className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 mb-4">
+                            <Text className="text-green-600 text-sm">{successMessage}</Text>
+                        </View>
+                    ) : null}
+
                     <View className="space-y-4">
                         {/* Email */}
                         <View>
@@ -162,7 +161,7 @@ export default function RegisterScreen() {
                                 className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
                                 placeholder="Masukkan email Anda"
                                 value={email}
-                                onChangeText={setEmail}
+                                onChangeText={(text) => { setEmail(text); setErrorMessage(''); }}
                                 keyboardType="email-address"
                                 autoCapitalize="none"
                                 editable={!loading}
@@ -178,7 +177,7 @@ export default function RegisterScreen() {
                                     className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary pr-12"
                                     placeholder="Masukkan password Anda"
                                     value={password}
-                                    onChangeText={setPassword}
+                                    onChangeText={(text) => { setPassword(text); setErrorMessage(''); }}
                                     secureTextEntry={!showPassword}
                                     editable={!loading}
                                     placeholderTextColor="#999"
@@ -192,13 +191,13 @@ export default function RegisterScreen() {
                                     </Text>
                                 </TouchableOpacity>
                             </View>
-                            
+
                             {/* Password Strength Indicator */}
                             {password.length > 0 && passwordStrength && (
                                 <View className="mt-2">
                                     <View className="flex-row items-center mb-1">
                                         <View className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                                            <View 
+                                            <View
                                                 style={{
                                                     width: `${(passwordStrength.score / 6) * 100}%`,
                                                     backgroundColor: passwordStrength.color,
@@ -206,7 +205,7 @@ export default function RegisterScreen() {
                                                 }}
                                             />
                                         </View>
-                                        <Text 
+                                        <Text
                                             className="ml-2 text-xs font-medium"
                                             style={{ color: passwordStrength.color }}
                                         >
@@ -247,7 +246,7 @@ export default function RegisterScreen() {
                                     className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary pr-12"
                                     placeholder="Konfirmasi password Anda"
                                     value={confirmPassword}
-                                    onChangeText={setConfirmPassword}
+                                    onChangeText={(text) => { setConfirmPassword(text); setErrorMessage(''); }}
                                     secureTextEntry={!showConfirmPassword}
                                     editable={!loading}
                                     placeholderTextColor="#999"
@@ -275,7 +274,7 @@ export default function RegisterScreen() {
                                 className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
                                 placeholder="Masukkan nama lengkap Anda"
                                 value={name}
-                                onChangeText={setName}
+                                onChangeText={(text) => { setName(text); setErrorMessage(''); }}
                                 editable={!loading}
                                 placeholderTextColor="#999"
                             />
@@ -289,7 +288,7 @@ export default function RegisterScreen() {
                                     className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
                                     placeholder="Umur"
                                     value={age}
-                                    onChangeText={setAge}
+                                    onChangeText={(text) => { setAge(text); setErrorMessage(''); }}
                                     keyboardType="numeric"
                                     editable={!loading}
                                     placeholderTextColor="#999"
@@ -303,16 +302,16 @@ export default function RegisterScreen() {
                                         <TouchableOpacity
                                             key={option.value}
                                             className={`flex-1 border rounded-lg px-3 py-3 items-center ${
-                                                gender === option.value 
-                                                    ? 'bg-primary border-primary' 
+                                                gender === option.value
+                                                    ? 'bg-primary border-primary'
                                                     : 'bg-input border-border'
                                             }`}
                                             onPress={() => setGender(option.value)}
                                             disabled={loading}
                                         >
                                             <Text className={`text-sm font-medium ${
-                                                gender === option.value 
-                                                    ? 'text-text-inverse' 
+                                                gender === option.value
+                                                    ? 'text-text-inverse'
                                                     : 'text-text-primary'
                                             }`}>
                                                 {option.label}
@@ -331,7 +330,7 @@ export default function RegisterScreen() {
                                     className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
                                     placeholder="Berat"
                                     value={weight}
-                                    onChangeText={setWeight}
+                                    onChangeText={(text) => { setWeight(text); setErrorMessage(''); }}
                                     keyboardType="numeric"
                                     editable={!loading}
                                     placeholderTextColor="#999"
@@ -344,7 +343,7 @@ export default function RegisterScreen() {
                                     className="bg-input border border-border rounded-lg px-4 py-3 text-base text-text-primary"
                                     placeholder="Tinggi"
                                     value={height}
-                                    onChangeText={setHeight}
+                                    onChangeText={(text) => { setHeight(text); setErrorMessage(''); }}
                                     keyboardType="numeric"
                                     editable={!loading}
                                     placeholderTextColor="#999"
@@ -360,16 +359,16 @@ export default function RegisterScreen() {
                                     <TouchableOpacity
                                         key={option.value}
                                         className={`border rounded-lg px-4 py-3 ${
-                                            role === option.value 
-                                                ? 'bg-primary border-primary' 
+                                            role === option.value
+                                                ? 'bg-primary border-primary'
                                                 : 'bg-input border-border'
                                         }`}
                                         onPress={() => setRole(option.value)}
                                         disabled={loading}
                                     >
                                         <Text className={`text-base font-medium ${
-                                            role === option.value 
-                                                ? 'text-text-inverse' 
+                                            role === option.value
+                                                ? 'text-text-inverse'
                                                 : 'text-text-primary'
                                         }`}>
                                             {option.label}
@@ -380,7 +379,7 @@ export default function RegisterScreen() {
                         </View>
 
                         {/* Register Button */}
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             className="bg-primary rounded-lg py-4 items-center mt-6"
                             onPress={handleRegister}
                             disabled={loading}

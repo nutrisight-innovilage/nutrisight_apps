@@ -1,17 +1,26 @@
 /**
- * photoSyncStrategy.ts (v2.1 - Direct OpenRouter Integration)
+ * photoSyncStrategy.ts (v4.0 - Fixed Food Categories + NutritionCalculator)
  * ---------------------------------------------------------------------------
- * Photo-specific sync strategy with DIRECT OpenRouter GPT-4 Vision calls.
+ * Photo-specific sync strategy with DIRECT OpenRouter GPT-4.1 calls.
+ * 
+ * KEY CHANGES from v3.0:
+ * • AI ONLY detects food category from fixed list + portion in grams
+ * • Nutrition calculation done by NutritionCalculator (fixed formulas)
+ * • Vitamin/mineral info included (non-calculated, informational)
+ * 
+ * Fixed Food Categories:
+ * [ayam, ikan, nasi, tempe, telur, tahu, sambal, sayur, kuah, other]
  * 
  * Flow:
  * 1. User takes photo → saved locally (instant)
  * 2. Photo queued for sync
  * 3. When online:
  *    a. Upload photo to Appwrite Storage
- *    b. Call OpenRouter GPT-4 Vision directly
- *    c. Parse AI response
- *    d. Save to photo_analysis collection
- *    e. Update local scan with nutrition data
+ *    b. Call OpenRouter GPT-4.1 (detect category + portion grams ONLY)
+ *    c. Parse AI response → DetectedFoodItem[]
+ *    d. Call NutritionCalculator to compute nutrition per food
+ *    e. Save to photo_analysis collection
+ *    f. Update local scan with nutrition data
  * ---------------------------------------------------------------------------
  */
 
@@ -21,6 +30,13 @@ import { MealOfflineAPI } from '@/app/services/meal/mealOfflineAPI';
 import PhotoUploadService from '@/app/services/camera/photoUploadService';
 import authService from '@/app/services/auth/authService';
 import {
+  NutritionCalculator,
+  DetectedFoodItem,
+  MealNutritionResult,
+  FoodCategory,
+  ALL_FOOD_CATEGORIES,
+} from '@/app/services/meal/nutritionCalculator';
+import {
   databases,
   generateId,
   DATABASE_ID,
@@ -28,6 +44,7 @@ import {
   handleAppwriteError,
 } from '@/app/config/appwriteConfig';
 import EnvConfig from '@/app/utils/env';
+import { Permission, Role } from 'appwrite';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,23 +76,17 @@ interface OpenRouterResponse {
   };
 }
 
-interface AIAnalysisResult {
+/**
+ * Raw AI Detection Result (from GPT-4.1)
+ * Only category + portion grams — NO nutrition data
+ */
+interface AIDetectionResponse {
   foods: Array<{
-    name: string;
-    portionSize: string;
-    calories: number;
-    protein: number;
-    carbs: number;
-    fats: number;
-    confidence: number;
+    category: string;         // Must be one of FoodCategory
+    portionGrams: number;     // Always in grams
+    confidenceCategory: number;
+    confidencePortion: number;
   }>;
-  totalNutrition: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fats: number;
-  };
-  confidence: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,55 +95,82 @@ interface AIAnalysisResult {
 
 const OPENROUTER_API_KEY = EnvConfig.openrouter?.apiKey || '';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'openai/gpt-4-vision-preview';
+const MODEL = 'openai/gpt-4.1';
 
-// GPT-4 Vision Prompt for Food Analysis
-const FOOD_ANALYSIS_PROMPT = `Analyze this food image and provide detailed nutritional information.
+// ---------------------------------------------------------------------------
+// GPT-4.1 Prompt — Fixed Categories Only
+// ---------------------------------------------------------------------------
 
-Instructions:
-1. Identify all food items visible in the image
-2. Estimate portion sizes (in grams or common serving sizes)
-3. Calculate nutritional information per item
-4. Provide confidence scores (0-1) for each detection
+const FOOD_DETECTION_PROMPT = `You are a food detection AI for Indonesian meals. Analyze the food image and classify each visible food item into one of these EXACT categories:
 
-Return your analysis in this EXACT JSON format:
+ALLOWED CATEGORIES (use ONLY these values):
+- "ayam" → Chicken (any preparation: goreng, bakar, rebus, etc.)
+- "ikan" → Fish (any type: goreng, bakar, pindang, etc.)
+- "nasi" → Rice (putih, goreng, uduk, etc.)
+- "tempe" → Tempeh (goreng, bacem, mendoan, etc.)
+- "telur" → Egg (goreng, rebus, dadar, etc.)
+- "tahu" → Tofu (goreng, bacem, etc.)
+- "sambal" → Chili sauce/paste (any type)
+- "sayur" → Vegetables (any: kangkung, bayam, lalapan, capcay, etc.)
+- "kuah" → Broth/soup liquid (soto, sup, rawon broth, etc.)
+- "other" → Anything else not in above categories
+
+IMPORTANT RULES:
+1. ONLY use categories from the list above. No other values allowed.
+2. portionGrams MUST be in GRAMS only (not ml, not pieces, not servings).
+3. For "kuah" (broth), estimate the liquid volume in grams (1ml ≈ 1g).
+4. If same category appears multiple times (e.g., 2 types of sayur), combine into one entry.
+5. Respond with VALID JSON only. No text before or after.
+
+OUTPUT FORMAT (STRICT):
 {
   "foods": [
     {
-      "name": "food name",
-      "portionSize": "description (e.g. '1 medium piece, ~150g')",
-      "calories": number,
-      "protein": number,
-      "carbs": number,
-      "fats": number,
-      "confidence": 0.XX
+      "category": "<one of the allowed categories>",
+      "portionGrams": <number in grams>,
+      "confidenceCategory": <0.00 to 1.00>,
+      "confidencePortion": <0.00 to 1.00>
     }
-  ],
-  "totalNutrition": {
-    "calories": number,
-    "protein": number,
-    "carbs": number,
-    "fats": number
-  },
-  "confidence": 0.XX
+  ]
 }
 
-Be as accurate as possible. If unsure, indicate lower confidence. Round nutrition values to 1 decimal place.`;
+EXAMPLE 1 — Nasi padang plate:
+{
+  "foods": [
+    { "category": "nasi", "portionGrams": 200, "confidenceCategory": 0.95, "confidencePortion": 0.85 },
+    { "category": "ayam", "portionGrams": 120, "confidenceCategory": 0.92, "confidencePortion": 0.80 },
+    { "category": "sayur", "portionGrams": 80, "confidenceCategory": 0.88, "confidencePortion": 0.75 },
+    { "category": "sambal", "portionGrams": 25, "confidenceCategory": 0.90, "confidencePortion": 0.70 },
+    { "category": "telur", "portionGrams": 55, "confidenceCategory": 0.94, "confidencePortion": 0.88 }
+  ]
+}
+
+EXAMPLE 2 — Soto ayam:
+{
+  "foods": [
+    { "category": "kuah", "portionGrams": 250, "confidenceCategory": 0.90, "confidencePortion": 0.72 },
+    { "category": "ayam", "portionGrams": 80, "confidenceCategory": 0.88, "confidencePortion": 0.78 },
+    { "category": "nasi", "portionGrams": 180, "confidenceCategory": 0.95, "confidencePortion": 0.82 },
+    { "category": "telur", "portionGrams": 50, "confidenceCategory": 0.92, "confidencePortion": 0.90 }
+  ]
+}
+
+Now analyze the provided food image:`;
 
 // ---------------------------------------------------------------------------
-// Photo Sync Strategy (v2.1)
+// Photo Sync Strategy (v4.0)
 // ---------------------------------------------------------------------------
 
 export class PhotoSyncStrategy implements SyncStrategy {
   /**
-   * Prepare photo data untuk sync
+   * Prepare photo data for sync
    */
   async prepare(data: PhotoSyncData): Promise<SyncPayload> {
     return {
       id: `photo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type: 'photo',
       data: data,
-      priority: 2, // High priority
+      priority: 2,
       retryCount: 0,
       maxRetries: 3,
       createdAt: new Date().toISOString(),
@@ -160,19 +198,16 @@ export class PhotoSyncStrategy implements SyncStrategy {
 
   /**
    * Handle: analyzePhoto
-   * Upload foto → Call GPT-4 Vision → Parse result → Save to DB → Update local
+   * Upload → GPT-4.1 detect categories → NutritionCalculator → Save
    */
   private async handleAnalyzePhoto(data: PhotoSyncData): Promise<{
     photoAnalysisId: string;
     photoUrl: string;
-    aiResult: AIAnalysisResult;
+    nutritionResult: MealNutritionResult;
   }> {
     console.log('[PhotoSync:AnalyzePhoto] Starting photo analysis flow...');
 
-    // ========================================================================
     // STEP 1: Get userId
-    // ========================================================================
-    
     let userId: string;
     try {
       const authData = await authService.getCurrentUser();
@@ -182,11 +217,8 @@ export class PhotoSyncStrategy implements SyncStrategy {
       userId = data.metadata.userId || 'unknown';
     }
 
-    // ========================================================================
-    // STEP 2: Upload foto ke Appwrite Storage
-    // ========================================================================
-    
-    console.log('[PhotoSync:AnalyzePhoto] Uploading photo to storage...');
+    // STEP 2: Upload photo to Appwrite Storage
+    console.log('[PhotoSync:AnalyzePhoto] Uploading photo...');
     
     const uploadResult = await PhotoUploadService.uploadPhoto(
       data.photoUri,
@@ -199,26 +231,35 @@ export class PhotoSyncStrategy implements SyncStrategy {
 
     console.log('[PhotoSync:AnalyzePhoto] ✅ Photo uploaded:', uploadResult.fileId);
 
-    // ========================================================================
-    // STEP 3: Call OpenRouter GPT-4 Vision
-    // ========================================================================
-    
-    console.log('[PhotoSync:AnalyzePhoto] Calling GPT-4 Vision...');
+    // STEP 3: Call GPT-4.1 — detect categories + portions ONLY
+    console.log('[PhotoSync:AnalyzePhoto] Calling GPT-4.1 for food detection...');
     
     const startTime = Date.now();
-    const aiResult = await this.callOpenRouterVision(uploadResult.fileUrl);
-    const processingTime = Date.now() - startTime;
+    const aiDetection = await this.callOpenRouterVision(uploadResult.fileUrl);
+    const detectionTime = Date.now() - startTime;
 
-    console.log('[PhotoSync:AnalyzePhoto] ✅ AI analysis complete:', {
-      foods: aiResult.foods.length,
-      confidence: aiResult.confidence,
-      processingTime: `${processingTime}ms`,
+    // STEP 4: Parse + validate AI response → DetectedFoodItem[]
+    const detectedItems = NutritionCalculator.parseAIDetection(aiDetection);
+
+    console.log('[PhotoSync:AnalyzePhoto] ✅ Detected:', {
+      items: detectedItems.length,
+      categories: detectedItems.map(i => `${i.category}(${i.portionGrams}g)`),
+      detectionTime: `${detectionTime}ms`,
     });
 
-    // ========================================================================
-    // STEP 4: Save analysis log to Appwrite
-    // ========================================================================
-    
+    // STEP 5: Calculate nutrition using NutritionCalculator (fixed formulas)
+    const nutritionResult = NutritionCalculator.calculateMeal(detectedItems);
+
+    console.log('[PhotoSync:AnalyzePhoto] ✅ Nutrition calculated:', {
+      totalCalories: nutritionResult.totalNutrition.calories,
+      totalProtein: nutritionResult.totalNutrition.protein,
+      totalCarbs: nutritionResult.totalNutrition.carbs,
+      totalFats: nutritionResult.totalNutrition.fats,
+      vitamins: nutritionResult.allVitaminsMinerals.vitamins.length,
+      minerals: nutritionResult.allVitaminsMinerals.minerals.length,
+    });
+
+    // STEP 6: Save analysis log to Appwrite
     console.log('[PhotoSync:AnalyzePhoto] Saving analysis log...');
     
     const photoAnalysisId = await this.saveAnalysisLog({
@@ -226,37 +267,39 @@ export class PhotoSyncStrategy implements SyncStrategy {
       photoUrl: uploadResult.fileUrl,
       photoFileId: uploadResult.fileId,
       scanId: data.localScanId,
-      aiResult,
-      processingTime,
+      nutritionResult,
+      detectedItems,
+      processingTime: detectionTime,
+      mealType: data.metadata.mealType,
     });
 
-    console.log('[PhotoSync:AnalyzePhoto] ✅ Analysis log saved:', photoAnalysisId);
+    console.log('[PhotoSync:AnalyzePhoto] ✅ Analysis saved:', photoAnalysisId);
 
     return {
       photoAnalysisId,
       photoUrl: uploadResult.fileUrl,
-      aiResult,
+      nutritionResult,
     };
   }
 
   /**
-   * Call OpenRouter GPT-4 Vision API
+   * Call OpenRouter GPT-4.1 API — Food Category Detection Only
    */
-  private async callOpenRouterVision(imageUrl: string): Promise<AIAnalysisResult> {
+  private async callOpenRouterVision(imageUrl: string): Promise<AIDetectionResponse> {
     try {
       if (!OPENROUTER_API_KEY) {
         throw new Error('OpenRouter API key not configured');
       }
 
-      console.log('[PhotoSync] Calling OpenRouter API...');
+      console.log('[PhotoSync] Calling OpenRouter GPT-4.1...');
 
       const response = await fetch(OPENROUTER_ENDPOINT, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://your-app-domain.com', // Optional: Your app domain
-          'X-Title': 'NutriTrack App', // Optional: Your app name
+          'HTTP-Referer': 'https://nutritrack-app.com',
+          'X-Title': 'NutriTrack App',
         },
         body: JSON.stringify({
           model: MODEL,
@@ -266,7 +309,7 @@ export class PhotoSyncStrategy implements SyncStrategy {
               content: [
                 {
                   type: 'text',
-                  text: FOOD_ANALYSIS_PROMPT,
+                  text: FOOD_DETECTION_PROMPT,
                 },
                 {
                   type: 'image_url',
@@ -277,8 +320,9 @@ export class PhotoSyncStrategy implements SyncStrategy {
               ],
             },
           ],
-          max_tokens: 1000,
-          temperature: 0.2, // Lower temperature for more consistent results
+          max_tokens: 500, // Smaller — response is simpler now
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
         }),
       });
 
@@ -299,26 +343,42 @@ export class PhotoSyncStrategy implements SyncStrategy {
       const aiContent = data.choices[0].message.content;
       console.log('[PhotoSync] Raw AI response:', aiContent);
 
-      // Extract JSON from response (handle markdown code blocks)
+      // Extract JSON (handle markdown code blocks if present)
       let jsonContent = aiContent;
       const jsonMatch = aiContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (jsonMatch) {
         jsonContent = jsonMatch[1];
       }
 
-      const parsed: AIAnalysisResult = JSON.parse(jsonContent);
+      const parsed: AIDetectionResponse = JSON.parse(jsonContent);
 
-      // Validate parsed data
-      if (!parsed.foods || !parsed.totalNutrition) {
-        throw new Error('Invalid AI response format');
+      // Validate structure
+      if (!parsed.foods || !Array.isArray(parsed.foods)) {
+        throw new Error('Invalid AI response: missing foods array');
       }
 
-      console.log('[PhotoSync] ✅ AI response parsed successfully');
+      // Validate each food item
+      for (const food of parsed.foods) {
+        if (!food.category || typeof food.portionGrams !== 'number') {
+          throw new Error('Invalid food item: missing category or portionGrams');
+        }
 
+        // Validate category is in allowed list
+        if (!NutritionCalculator.isValidCategory(food.category)) {
+          console.warn(`[PhotoSync] Unknown category "${food.category}", will map to "other"`);
+          // Don't throw — parseAIDetection will handle this
+        }
+
+        // Ensure confidence values exist
+        food.confidenceCategory = food.confidenceCategory ?? 0.5;
+        food.confidencePortion = food.confidencePortion ?? 0.5;
+      }
+
+      console.log('[PhotoSync] ✅ AI detection parsed successfully');
       return parsed;
     } catch (error) {
       console.error('[PhotoSync] OpenRouter API error:', error);
-      throw error instanceof Error ? error : new Error('AI analysis failed');
+      throw error instanceof Error ? error : new Error('AI detection failed');
     }
   }
 
@@ -330,10 +390,42 @@ export class PhotoSyncStrategy implements SyncStrategy {
     photoUrl: string;
     photoFileId?: string;
     scanId: string;
-    aiResult: AIAnalysisResult;
+    nutritionResult: MealNutritionResult;
+    detectedItems: DetectedFoodItem[];
     processingTime: number;
+    mealType?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
   }): Promise<string> {
     try {
+      // Build aiResponse JSON — includes nutrition totals inside
+      const aiResponseJson = JSON.stringify({
+        detectedItems: data.detectedItems,
+        nutritionResult: data.nutritionResult,
+        // Store totals here so they're queryable from the JSON
+        totals: data.nutritionResult.totalNutrition,
+        mealType: data.mealType || 'snack',
+      });
+
+      // Build extractedFoods JSON — summary of detected items
+      const extractedFoodsJson = JSON.stringify(
+        data.nutritionResult.foods.map(f => ({
+          category: f.category,
+          label: f.label,
+          portionGrams: f.portionGrams,
+          calories: f.calories,
+        }))
+      );
+
+      // ⚠️ ONLY write attributes that exist in the Appwrite collection schema:
+      // userId, photoUrl, photoFileId, scanId, aiProvider, aiResponse,
+      // extractedFoods, confidence, processingTime, status, createdAt
+      //
+      // If you want totalCalories/totalProtein/totalCarbs/totalFats/mealType
+      // as separate queryable fields, add them to the collection first:
+      //   totalCalories  → Float, required, default 0
+      //   totalProtein   → Float, required, default 0
+      //   totalCarbs     → Float, required, default 0
+      //   totalFats      → Float, required, default 0
+      //   mealType       → String (50), optional
       const doc = await databases.createDocument(
         DATABASE_ID,
         COLLECTIONS.PHOTO_ANALYSIS,
@@ -343,14 +435,20 @@ export class PhotoSyncStrategy implements SyncStrategy {
           photoUrl: data.photoUrl,
           photoFileId: data.photoFileId || '',
           scanId: data.scanId,
-          aiProvider: 'openrouter-gpt4v',
-          aiResponse: JSON.stringify(data.aiResult),
-          extractedFoods: JSON.stringify(data.aiResult.foods.map(f => f.name)),
-          confidence: data.aiResult.confidence,
+          aiProvider: 'openrouter-gpt4.1',
+          aiResponse: aiResponseJson,
+          extractedFoods: extractedFoodsJson,
+          confidence: data.nutritionResult.confidence,
           processingTime: data.processingTime,
           status: 'completed',
           createdAt: new Date().toISOString(),
-        }
+        },
+        [
+          Permission.read(Role.any()),
+          Permission.write(Role.any()),
+          Permission.update(Role.any()),
+          Permission.delete(Role.any()),
+        ]
       );
 
       return doc.$id;
@@ -364,34 +462,23 @@ export class PhotoSyncStrategy implements SyncStrategy {
   // SUCCESS HANDLER
   // ===========================================================================
 
-  /**
-   * Handler ketika upload berhasil
-   * Update local scan dengan AI results
-   */
   async onSuccess(result: any, payload: SyncPayload): Promise<void> {
     const data = payload.data as PhotoSyncData;
-
     console.log('[PhotoSync] ✅ Success for photo analysis');
-
     await this.onAnalyzePhotoSuccess(result, data);
   }
 
-  /**
-   * Success: analyzePhoto
-   * Update local scan dengan AI nutrition data
-   */
   private async onAnalyzePhotoSuccess(
     result: {
       photoAnalysisId: string;
       photoUrl: string;
-      aiResult: AIAnalysisResult;
+      nutritionResult: MealNutritionResult;
     },
     data: PhotoSyncData
   ): Promise<void> {
     console.log('[PhotoSync:AnalyzePhoto] Processing success...');
 
     try {
-      // Get local scan
       const localScan = await MealOfflineAPI.getLocalScanById(data.localScanId);
       
       if (!localScan) {
@@ -399,18 +486,20 @@ export class PhotoSyncStrategy implements SyncStrategy {
         return;
       }
 
-      // Extract food names
-      const foodNames = result.aiResult.foods.map(f => f.name);
-      const foodName = foodNames.length > 0
-        ? foodNames.join(', ')
+      // Build food name from detected categories
+      const foodDescriptions = result.nutritionResult.foods.map(f =>
+        `${f.label} (${f.portionGrams}g)`
+      );
+      const foodName = foodDescriptions.length > 0
+        ? foodDescriptions.join(', ')
         : 'Detected Food';
 
-      // Update local scan dengan AI results
-      const nutrition = result.aiResult.totalNutrition;
+      // Update local scan with calculated nutrition
+      const nutrition = result.nutritionResult.totalNutrition;
       
       await MealOfflineAPI.updateLocalScan(data.localScanId, {
         foodName,
-        calories: Math.round(nutrition.calories),
+        calories: nutrition.calories,
         protein: Math.round(nutrition.protein * 10) / 10,
         carbs: Math.round(nutrition.carbs * 10) / 10,
         fats: Math.round(nutrition.fats * 10) / 10,
@@ -419,10 +508,9 @@ export class PhotoSyncStrategy implements SyncStrategy {
       // Mark as synced
       await MealOfflineAPI.markScanAsSynced(data.localScanId, result.photoAnalysisId);
 
-      console.log('[PhotoSync:AnalyzePhoto] ✅ Local scan updated with AI results');
+      console.log('[PhotoSync:AnalyzePhoto] ✅ Local scan updated with nutrition results');
     } catch (error) {
       console.error('[PhotoSync:AnalyzePhoto] Failed to update local scan:', error);
-      // Non-critical error, don't throw
     }
   }
 
@@ -430,25 +518,16 @@ export class PhotoSyncStrategy implements SyncStrategy {
   // FAILURE HANDLER
   // ===========================================================================
 
-  /**
-   * Handler ketika upload gagal
-   */
   async onFailure(error: Error, payload: SyncPayload): Promise<void> {
     const data = payload.data as PhotoSyncData;
-
     console.error('[PhotoSync] ❌ Failure for photo analysis:', error.message);
-
     await this.onAnalyzePhotoFailure(error, data);
   }
 
-  /**
-   * Failure: analyzePhoto
-   */
   private async onAnalyzePhotoFailure(error: Error, data: PhotoSyncData): Promise<void> {
     console.error('[PhotoSync:AnalyzePhoto] ❌ Photo analysis failed:', error.message);
 
     try {
-      // Update local scan dengan error status
       const localScan = await MealOfflineAPI.getLocalScanById(data.localScanId);
       
       if (localScan) {
@@ -468,9 +547,6 @@ export class PhotoSyncStrategy implements SyncStrategy {
   // VALIDATION
   // ===========================================================================
 
-  /**
-   * Validate photo sync data
-   */
   validate(data: any): boolean {
     if (!data || typeof data !== 'object') {
       console.error('[PhotoSync] Validation failed: Invalid data type');
@@ -498,26 +574,20 @@ export class PhotoSyncStrategy implements SyncStrategy {
   }
 
   // ===========================================================================
-  // PRIORITY & RETRY CONFIGURATION
+  // PRIORITY & RETRY
   // ===========================================================================
 
-  /**
-   * Get priority
-   */
   getPriority(): number {
-    return 2; // High priority (after auth)
+    return 2;
   }
 
-  /**
-   * Get max retries
-   */
   getMaxRetries(): number {
-    return 3; // Photo analysis expensive, limit retries
+    return 3;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Export Strategy Instance
+// Export
 // ---------------------------------------------------------------------------
 
 export const photoSyncStrategy = new PhotoSyncStrategy();

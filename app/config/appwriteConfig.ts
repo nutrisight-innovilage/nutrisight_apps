@@ -58,7 +58,6 @@ export const COLLECTIONS = {
 } as const;
 
 export const BUCKETS = {
-  PROFILE_PICTURES: 'profile-pictures',
   FOOD_IMAGES: 'food-images',
   MEAL_PHOTOS: 'meal-photos', // v2.0 - For user meal photos
 } as const;
@@ -387,15 +386,7 @@ export const sendDashboardPing = async (): Promise<{
           throw e;
         }
       },
-      async () => {
-        try {
-          await storage.listFiles(BUCKETS.PROFILE_PICTURES, [QueryHelpers.limit(1)]);
-          return 'Storage access';
-        } catch (e: any) {
-          if (e?.code === 401 || e?.code === 404) return 'Storage (expected error)';
-          throw e;
-        }
-      },
+     
     ];
 
     const results = [];

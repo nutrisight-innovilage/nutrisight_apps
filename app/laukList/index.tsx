@@ -27,7 +27,7 @@ const MenuItem = memo<{
   onNavigate: (id: string) => void;
 }>(({ item, index, onNavigate }) => {
   return (
-    <Animated.View entering={FadeInDown.delay(index * 100).springify()}>
+    <Animated.View entering={index < 10 ? FadeInDown.delay(index * 50).springify() : undefined}>
       <View className="mb-4">
         <Card onPress={() => onNavigate(item.id)}>
           <FoodCardItem

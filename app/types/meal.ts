@@ -1,12 +1,12 @@
 /**
- * meal.ts (v2.0 COMPLETE)
+ * meal.ts (v2.1 COMPLETE)
  * ---------------------------------------------------------------------------
  * Unified types untuk meal input dan nutrition output.
  * 
- * v2.0 Features:
- * • ✅ Photo analysis types
- * • ✅ Historical sync types
- * • ✅ Bulk sync result types
+ * v2.1 Changes:
+ * • ✅ WeeklyInsight: added balancedMealsCount + aiSummary
+ * • ✅ PhotoAnalysisAI types for OpenRouter integration
+ * • ✅ TodayStatistics type for dashboard
  * ---------------------------------------------------------------------------
  */
 
@@ -16,36 +16,21 @@ import { CartItem } from './food';
 // Meal Input Types
 // ---------------------------------------------------------------------------
 
-/**
- * Metadata meal yang akan disimpan bersama cart
- * untuk keperluan analisis nutrisi
- */
 export interface MealMetadata {
   userId?: string;
-  /** Porsi nasi dalam satuan piring (0, 0.25, 0.5, 1, 1.5, 2, 3) */
   ricePortion: number;
-  /** Timestamp meal dibuat */
   createdAt: string;
-  /** Timestamp terakhir diupdate */
   updatedAt: string;
-  /** Optional: meal type (breakfast, lunch, dinner, snack) */
   mealType?: MealType;
-  /** Optional: catatan user */
   notes?: string;
 }
 
-/**
- * Data lengkap untuk analysis submission
- */
 export interface NutritionAnalysisPayload {
   items: CartItem[];
   ricePortion: number;
   metadata: MealMetadata;
 }
 
-/**
- * Rice portion definition dengan gram conversion
- */
 export interface RicePortion {
   value: number;
   label: string;
@@ -66,10 +51,6 @@ export const RICE_PORTIONS: RicePortion[] = [
 // Meal Output Types
 // ---------------------------------------------------------------------------
 
-/**
- * Hasil scan nutrisi yang sudah dianalisis
- * Ini adalah output dari nutrition analysis API
- */
 export interface NutritionScan {
   userId?: string;
   id: string;
@@ -86,24 +67,15 @@ export interface NutritionScan {
 // Photo Analysis Types (v2.0)
 // ---------------------------------------------------------------------------
 
-/**
- * Status photo analysis
- */
 export type PhotoAnalysisStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
-/**
- * Detected item dari AI
- */
 export interface DetectedItem {
   name: string;
-  confidence: number;        // 0-1
+  confidence: number;
   quantity: number;
   estimatedGrams: number;
 }
 
-/**
- * Photo analysis result
- */
 export interface PhotoAnalysis {
   id: string;
   userId: string;
@@ -122,9 +94,6 @@ export interface PhotoAnalysis {
   error?: string;
 }
 
-/**
- * Photo analysis request
- */
 export interface AnalyzePhotoRequest {
   photoUri: string;
   metadata?: {
@@ -133,9 +102,6 @@ export interface AnalyzePhotoRequest {
   };
 }
 
-/**
- * Photo analysis response
- */
 export interface AnalyzePhotoResponse {
   success: boolean;
   scan?: NutritionScan;
@@ -144,12 +110,44 @@ export interface AnalyzePhotoResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Historical Sync Types (v2.0)
+// Photo Analysis AI Types (v2.1 - OpenRouter)
 // ---------------------------------------------------------------------------
 
 /**
- * Bulk sync result
+ * Result from AI photo analysis via OpenRouter
  */
+export interface AIPhotoAnalysisResult {
+  success: boolean;
+  foods: AIDetectedFood[];
+  totalNutrition: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fats: number;
+  };
+  mealDescription: string;
+  error?: string;
+}
+
+/**
+ * Individual food detected by AI
+ */
+export interface AIDetectedFood {
+  name: string;
+  estimatedGrams: number;
+  confidence: number;
+  nutrition: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fats: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Historical Sync Types (v2.0)
+// ---------------------------------------------------------------------------
+
 export interface BulkSyncResult {
   success: boolean;
   syncedCount: number;
@@ -158,9 +156,6 @@ export interface BulkSyncResult {
   errors: Array<{ localId: string; error: string }>;
 }
 
-/**
- * Historical data sync progress
- */
 export interface HistoricalSyncProgress {
   totalBatches: number;
   completedBatches: number;
@@ -174,9 +169,6 @@ export interface HistoricalSyncProgress {
 // Pending Queue Types (v2.0)
 // ---------------------------------------------------------------------------
 
-/**
- * Pending scan yang belum ter-sync
- */
 export interface PendingScan {
   localId: string;
   scanData: NutritionScan;
@@ -186,9 +178,6 @@ export interface PendingScan {
   lastAttempt?: string;
 }
 
-/**
- * Pending photo yang belum di-upload (v2.0)
- */
 export interface PendingPhoto {
   localId: string;
   photoUri: string;
@@ -203,9 +192,6 @@ export interface PendingPhoto {
   lastAttempt?: string;
 }
 
-/**
- * Pending advice yang belum terkirim (v2.0)
- */
 export interface PendingAdvice {
   localId: string;
   firstDate: string;
@@ -220,9 +206,6 @@ export interface PendingAdvice {
 // Analysis & Goals Types
 // ---------------------------------------------------------------------------
 
-/**
- * Target nutrisi harian user
- */
 export interface NutritionGoals {
   calories: { min: number; max: number }; 
   protein: { min: number; max: number; label: string };
@@ -231,7 +214,10 @@ export interface NutritionGoals {
 }
 
 /**
- * Insights mingguan dari nutrition scans
+ * ✅ v2.1 UPDATED: WeeklyInsight with balancedMealsCount + aiSummary
+ * 
+ * balancedMealsCount: Number of meals where all macros are within goals
+ * aiSummary: One-sentence AI-generated summary (from OpenRouter GPT-4.1)
  */
 export interface WeeklyInsight {
   totalCalories: number;
@@ -240,11 +226,25 @@ export interface WeeklyInsight {
   totalCarbs: number;
   totalFats: number;
   mealsCount: number;
+  /** Number of meals with balanced nutrition (all macros within goals) */
+  balancedMealsCount: number;
+  /** AI-generated one-liner summary of the week (optional, loaded async) */
+  aiSummary?: string;
 }
 
 /**
- * Data point untuk charting
+ * Today's nutrition statistics for the dashboard
  */
+export interface TodayStatistics {
+  totalCalories: number;
+  totalProtein: number;
+  totalCarbs: number;
+  totalFats: number;
+  mealsCount: number;
+  balancedMealsCount: number;
+  scans: NutritionScan[];
+}
+
 export interface ChartDataPoint {
   x: string;
   y: number;
@@ -255,9 +255,6 @@ export interface ChartDataPoint {
 // API Request/Response Types
 // ---------------------------------------------------------------------------
 
-/**
- * Request body untuk submit meal analysis
- */
 export interface AnalyzeMealRequest {
   items: CartItem[];
   ricePortion: number;
@@ -265,9 +262,6 @@ export interface AnalyzeMealRequest {
   metadata: MealMetadata;
 }
 
-/**
- * Response dari meal analysis API
- */
 export interface AnalyzeMealResponse {
   success: boolean;
   scan?: NutritionScan;
@@ -275,9 +269,6 @@ export interface AnalyzeMealResponse {
   message: string;
 }
 
-/**
- * Response untuk get scans dengan filters
- */
 export interface GetScansResponse {
   scans: NutritionScan[];
   totalCount: number;
@@ -289,9 +280,6 @@ export interface GetScansResponse {
 // Display Types (untuk UI components)
 // ---------------------------------------------------------------------------
 
-/**
- * Extended cart item untuk display dengan food details
- */
 export interface CartDisplayItem extends CartItem {
   foodName: string;
   description: string;
@@ -299,9 +287,6 @@ export interface CartDisplayItem extends CartItem {
   category: string;
 }
 
-/**
- * Meal summary untuk display di UI
- */
 export interface MealSummary {
   itemCount: number;
   totalQuantity: number;
@@ -316,25 +301,12 @@ export interface MealSummary {
 // Utility Types
 // ---------------------------------------------------------------------------
 
-/**
- * Meal type enum
- */
 export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+export type AnalysisStatus = 'idle' | 'pending' | 'analyzing' | 'completed' | 'failed';
 
-/**
- * Analysis status
- */
-export type AnalysisStatus = 'pending' | 'analyzing' | 'completed' | 'failed';
-
-/**
- * Date range filter
- */
 export interface DateRangeFilter {
   startDate: string;
   endDate: string;
 }
 
-/**
- * Sorting options untuk scans
- */
 export type ScanSortOption = 'date-desc' | 'date-asc' | 'calories-desc' | 'calories-asc' | 'manual-asc' | 'manual-desc';

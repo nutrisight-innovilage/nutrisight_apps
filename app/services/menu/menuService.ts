@@ -1,23 +1,9 @@
 /**
- * menuService.ts (REFACTORED - SyncManager Integration)
+ * menuService.ts (FIXED - Pagination + Timeout)
  * ---------------------------------------------------------------------------
- * TRUE OFFLINE-FIRST dengan SyncManager integration.
- * Mengikuti pattern dari authService & cartContext untuk consistency.
- * 
- * REFACTORED CHANGES:
- * • ✅ Cache sebagai primary data source (unchanged)
- * • ✅ Background sync menggunakan SyncManager (was: manual menuSyncStrategy)
- * • ✅ Network detection handled by SyncManager
- * • ✅ Retry logic handled by SyncManager
- * • ❌ REMOVED: Manual sync calls (triggerMenuSync)
- * • ❌ REMOVED: Manual syncInProgress flag
- * • ❌ REMOVED: Custom background sync methods
- * 
- * Flow Pattern:
- * 1. Always read from cache (menuOfflineAPI)
- * 2. Check if sync needed
- * 3. Queue for sync (SyncManager.sync) - non-blocking
- * 4. SyncManager handles rest automatically
+ * ADDITIONAL FIXES on top of race condition fixes:
+ * • ✅ FIX #5: Increased sync timeout (30s → 120s) for large datasets
+ * • ✅ FIX #6: Poll interval increased to reduce CPU during long syncs
  * ---------------------------------------------------------------------------
  */
 
@@ -34,41 +20,66 @@ import { getSyncManager } from '@/app/services/sync/syncManager';
 interface MenuServiceConfig {
   autoSync: boolean;
   syncInterval: number; // hours
-  offlineFirst: boolean; // Always true for offline-first
+  offlineFirst: boolean;
 }
 
+type SyncListener = (success: boolean) => void;
+
 // ---------------------------------------------------------------------------
-// Menu Service Class (REFACTORED - OFFLINE-FIRST + SyncManager)
+// Menu Service Class
 // ---------------------------------------------------------------------------
 
 class MenuService {
   private config: MenuServiceConfig = {
     autoSync: true,
     syncInterval: 24,
-    offlineFirst: true, // Enforced offline-first
+    offlineFirst: true,
   };
 
   private detailsCache: Record<string, FoodItemDetail> = {};
   private isOnline: boolean = false;
+  private syncListeners: SyncListener[] = [];
+  private syncPromise: Promise<boolean> | null = null;
 
   constructor() {
     this.setupNetworkListener();
     this.initializeOfflineFirst();
   }
 
-  /**
-   * Initialize offline-first strategy
-   */
+  // ===========================================================================
+  // SYNC LISTENER API
+  // ===========================================================================
+
+  addSyncListener(listener: SyncListener): () => void {
+    this.syncListeners.push(listener);
+    return () => {
+      this.syncListeners = this.syncListeners.filter(l => l !== listener);
+    };
+  }
+
+  private notifySyncListeners(success: boolean): void {
+    console.log(`[MenuService] 📢 Notifying ${this.syncListeners.length} listener(s), success=${success}`);
+    this.syncListeners.forEach(listener => {
+      try {
+        listener(success);
+      } catch (error) {
+        console.error('[MenuService] Listener error:', error);
+      }
+    });
+  }
+
+  // ===========================================================================
+  // INITIALIZATION
+  // ===========================================================================
+
   private async initializeOfflineFirst(): Promise<void> {
     try {
-      // Check if we have cached data
       const hasCachedData = await menuOfflineAPI.hasCachedData();
       
       if (!hasCachedData) {
         console.log('[MenuService] No cache found, will sync when online');
       }
 
-      // Trigger background sync if online and needed
       const isOnline = await this.checkNetwork();
       if (isOnline && await this.needsSync()) {
         this.queueBackgroundSync();
@@ -78,10 +89,6 @@ class MenuService {
     }
   }
 
-  /**
-   * Setup network listener for opportunistic sync
-   * SyncManager will auto-sync when online, but we also trigger explicitly
-   */
   private setupNetworkListener(): void {
     NetInfo.addEventListener(state => {
       const wasOffline = !this.isOnline;
@@ -89,7 +96,6 @@ class MenuService {
 
       console.log(`[MenuService] Network: ${this.isOnline ? 'ONLINE' : 'OFFLINE'}`);
 
-      // Trigger sync when coming back online
       if (wasOffline && this.isOnline && this.config.autoSync) {
         console.log('[MenuService] Network restored, queueing background sync');
         this.queueBackgroundSync();
@@ -97,24 +103,18 @@ class MenuService {
     });
   }
 
-  /**
-   * Check network status
-   */
   private async checkNetwork(): Promise<boolean> {
     const state = await NetInfo.fetch();
     this.isOnline = state.isConnected ?? false;
     return this.isOnline;
   }
 
-  /**
-   * Check if menu needs sync
-   */
   private async needsSync(): Promise<boolean> {
     try {
       const lastSync = await menuOfflineAPI.getLastSync();
       
       if (!lastSync) {
-        return true; // Never synced
+        return true;
       }
 
       const lastSyncTime = new Date(lastSync).getTime();
@@ -128,29 +128,99 @@ class MenuService {
   }
 
   // ===========================================================================
-  // OFFLINE-FIRST READ OPERATIONS
+  // ✅ FIX #5 & #6: CORE SYNC EXECUTION (increased timeout)
   // ===========================================================================
 
+  private async executeSync(forceRefresh: boolean, silent: boolean): Promise<boolean> {
+    try {
+      const syncManager = getSyncManager();
+
+      await syncManager.sync('menu', {
+        type: forceRefresh ? 'full_sync' : 'cache_update',
+        forceRefresh,
+        silent,
+      });
+
+      // ✅ FIX #5: 120s timeout for large datasets (was 30s)
+      // Syncing thousands of items takes time, especially on slow connections
+      const timeout = forceRefresh ? 180000 : 120000; // 3min for force, 2min for normal
+      const success = await this.waitForSyncComplete(timeout);
+
+      this.notifySyncListeners(success);
+
+      return success;
+    } catch (error) {
+      console.error('[MenuService] executeSync failed:', error);
+      this.notifySyncListeners(false);
+      return false;
+    }
+  }
+
   /**
-   * ✅ UNCHANGED: Fetch menu items (OFFLINE-FIRST)
-   * Always returns cached data immediately, syncs in background
+   * ✅ FIX #6: Adaptive poll interval
+   * - First 10s: check every 500ms (for small syncs)
+   * - After 10s: check every 2s (reduce CPU for large syncs)
    */
+  private waitForSyncComplete(timeout: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      let initialLastSync: string | null = null;
+
+      menuOfflineAPI.getLastSync().then(ls => { initialLastSync = ls; });
+
+      const poll = async () => {
+        try {
+          const syncManager = getSyncManager();
+          const pending = await syncManager.getPendingCount('menu');
+          const syncing = syncManager.isSyncing();
+
+          if (pending === 0 && !syncing) {
+            const currentLastSync = await menuOfflineAPI.getLastSync();
+            const cacheUpdated = currentLastSync !== null && currentLastSync !== initialLastSync;
+            
+            console.log(`[MenuService] Sync poll complete. Cache updated: ${cacheUpdated}`);
+            resolve(cacheUpdated);
+            return;
+          }
+
+          // Timeout check
+          const elapsed = Date.now() - startTime;
+          if (elapsed > timeout) {
+            console.warn(`[MenuService] Sync poll timed out after ${elapsed}ms`);
+            resolve(false);
+            return;
+          }
+
+          // ✅ FIX #6: Adaptive interval
+          const nextInterval = elapsed < 10000 ? 500 : 2000;
+          setTimeout(poll, nextInterval);
+        } catch (error) {
+          console.error('[MenuService] Sync poll error:', error);
+          resolve(false);
+        }
+      };
+
+      // Start polling
+      setTimeout(poll, 500);
+    });
+  }
+
+  // ===========================================================================
+  // OFFLINE-FIRST READ OPERATIONS (unchanged)
+  // ===========================================================================
+
   async fetchMenuItems(): Promise<FoodItem[]> {
     try {
-      // STEP 1: Always fetch from cache first (OFFLINE-FIRST)
       const cachedItems = await menuOfflineAPI.fetchMenuItems();
       
-      // STEP 2: Queue background sync if needed (non-blocking)
       if (this.config.autoSync && await this.needsSync()) {
         this.queueBackgroundSync();
       }
 
-      // STEP 3: Return cached data immediately
       return cachedItems;
     } catch (error) {
       console.error('[MenuService] Failed to fetch menu items:', error);
       
-      // If cache fails, try to get fallback data from offline API
       try {
         return await menuOfflineAPI.fetchMenuItems();
       } catch (fallbackError) {
@@ -160,24 +230,17 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Fetch food item detail (OFFLINE-FIRST with memory cache)
-   */
   async fetchFoodItemDetail(id: string): Promise<FoodItemDetail> {
     try {
-      // STEP 1: Check memory cache first (fastest)
       if (this.detailsCache[id]) {
         return this.detailsCache[id];
       }
 
-      // STEP 2: Fetch from local storage (offline-first)
       const detail = await menuOfflineAPI.fetchFoodItemDetail(id);
-      console.log(`[MenuService] Fetched detail for ${id} from local, ${JSON.stringify(detail)}`);
+      console.log(`[MenuService] Fetched detail for ${id} from local`);
       
-      // STEP 3: Update memory cache
       this.detailsCache[id] = detail;
       
-      // STEP 4: Opportunistic background sync
       if (this.config.autoSync && await this.needsSync()) {
         this.queueBackgroundSync();
       }
@@ -189,12 +252,8 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Fetch multiple food details (OFFLINE-FIRST)
-   */
   async fetchMultipleFoodDetails(ids: string[]): Promise<FoodItemDetail[]> {
     try {
-      // STEP 1: Check memory cache
       const cachedDetails: FoodItemDetail[] = [];
       const idsToFetch: string[] = [];
 
@@ -206,18 +265,15 @@ class MenuService {
         }
       });
 
-      // STEP 2: Fetch remaining from local storage
       let newDetails: FoodItemDetail[] = [];
       if (idsToFetch.length > 0) {
         newDetails = await menuOfflineAPI.fetchMultipleFoodDetails(idsToFetch);
         
-        // Update memory cache
         newDetails.forEach(detail => {
           this.detailsCache[detail.id] = detail;
         });
       }
 
-      // STEP 3: Opportunistic background sync
       if (this.config.autoSync && await this.needsSync()) {
         this.queueBackgroundSync();
       }
@@ -229,12 +285,8 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Search menu items (OFFLINE-FIRST)
-   */
   async searchMenuItems(query: string): Promise<FoodItem[]> {
     try {
-      // Always search from local cache
       return await menuOfflineAPI.searchMenuItems(query);
     } catch (error) {
       console.error('[MenuService] Failed to search menu items:', error);
@@ -242,12 +294,8 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Get menu by category (OFFLINE-FIRST)
-   */
   async fetchMenuByCategory(category: string): Promise<FoodItem[]> {
     try {
-      // Always fetch from local cache
       return await menuOfflineAPI.fetchMenuByCategory(category);
     } catch (error) {
       console.error('[MenuService] Failed to fetch menu by category:', error);
@@ -255,12 +303,8 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Get nutritional summary (OFFLINE-FIRST)
-   */
   async getNutritionalSummary(ids: string[]) {
     try {
-      // Always calculate from local cache
       return await menuOfflineAPI.getNutritionalSummary(ids);
     } catch (error) {
       console.error('[MenuService] Failed to calculate nutrition:', error);
@@ -268,16 +312,12 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Get recommended items (OFFLINE-FIRST)
-   */
   async getRecommendedItems(nutritionGoals?: {
     maxCalories?: number;
     minProtein?: number;
     maxCarbs?: number;
   }): Promise<FoodItem[]> {
     try {
-      // Always get recommendations from local cache
       return await menuOfflineAPI.getRecommendedItems(nutritionGoals);
     } catch (error) {
       console.error('[MenuService] Failed to get recommendations:', error);
@@ -286,37 +326,23 @@ class MenuService {
   }
 
   // ===========================================================================
-  // SYNC OPERATIONS (REFACTORED - Using SyncManager)
+  // SYNC OPERATIONS
   // ===========================================================================
 
-  /**
-   * ✅ REFACTORED: Queue background sync via SyncManager
-   * Non-blocking, automatic retry handling
-   */
   private queueBackgroundSync(): void {
-    try {
-      const syncManager = getSyncManager();
-      
-      // Queue menu sync - SyncManager will handle when to actually sync
-      syncManager.sync('menu', {
-  type: 'cache_update',
-  forceRefresh: false,
-  silent: true,
-}).catch(error => {
-        // Non-blocking - will retry via SyncManager
-        console.warn('[MenuService] Failed to queue sync, will retry later:', error);
-      });
-      
-      console.log('[MenuService] 📋 Menu sync queued');
-    } catch (error) {
-      console.warn('[MenuService] Failed to queue background sync:', error);
+    if (this.syncPromise) {
+      console.log('[MenuService] ⏭️ Background sync already running, skipping duplicate');
+      return;
     }
+
+    console.log('[MenuService] 📋 Queueing background sync...');
+
+    this.syncPromise = this.executeSync(false, true)
+      .finally(() => {
+        this.syncPromise = null;
+      });
   }
 
-  /**
-   * ✅ REFACTORED: Sync menu with server (explicit user-triggered sync)
-   * Now uses SyncManager instead of manual triggerMenuSync
-   */
   async syncMenu(forceRefresh: boolean = false): Promise<boolean> {
     try {
       const isOnline = await this.checkNetwork();
@@ -326,33 +352,25 @@ class MenuService {
         return false;
       }
 
-      // Check if already syncing
-      const syncManager = getSyncManager();
-      if (syncManager.isSyncing()) {
-        console.log('[MenuService] Sync already in progress');
-        return false;
+      if (this.syncPromise) {
+        console.log('[MenuService] ⏳ Sync in progress, waiting for it to complete...');
+        return await this.syncPromise;
       }
 
-      // Queue for sync and wait for result
-      await syncManager.sync('menu', {
-  type: forceRefresh ? 'full_sync' : 'cache_update',
-  forceRefresh,
-  silent: false,
-});
-      // Trigger immediate sync (user-initiated)
-      const result = await syncManager.syncType('menu');
+      this.clearCache();
 
-      return result.success && result.processedCount > 0;
+      this.syncPromise = this.executeSync(forceRefresh, false)
+        .finally(() => {
+          this.syncPromise = null;
+        });
+
+      return await this.syncPromise;
     } catch (error) {
       console.error('[MenuService] Failed to sync menu:', error);
       return false;
     }
   }
 
-  /**
-   * ✅ REFACTORED: Force refresh from server and update cache
-   * This is for explicit user pull-to-refresh action
-   */
   async forceRefresh(): Promise<boolean> {
     try {
       const isOnline = await this.checkNetwork();
@@ -362,30 +380,25 @@ class MenuService {
         return false;
       }
 
-      // Clear memory cache before refresh
+      if (this.syncPromise) {
+        console.log('[MenuService] Waiting for current sync before force refresh...');
+        await this.syncPromise;
+      }
+
       this.clearCache();
 
-      // Queue force refresh
-      const syncManager = getSyncManager();
-      await syncManager.sync('menu', {
-  type: 'full_sync',
-  forceRefresh: true,
-  silent: false,
-});
-      // Trigger immediate sync
-      const result = await syncManager.syncType('menu');
+      this.syncPromise = this.executeSync(true, false)
+        .finally(() => {
+          this.syncPromise = null;
+        });
 
-      return result.success && result.processedCount > 0;
+      return await this.syncPromise;
     } catch (error) {
       console.error('[MenuService] Failed to force refresh:', error);
       return false;
     }
   }
 
-  /**
-   * ✅ REFACTORED: Get sync status
-   * Now includes SyncManager status
-   */
   async getSyncStatus(): Promise<{
     hasCachedData: boolean;
     lastSync: string | null;
@@ -403,15 +416,16 @@ class MenuService {
     let cacheAge: number | null = null;
     if (lastSync) {
       const lastSyncTime = new Date(lastSync).getTime();
-      cacheAge = Math.floor((Date.now() - lastSyncTime) / (1000 * 60 * 60)); // hours
+      cacheAge = Math.floor((Date.now() - lastSyncTime) / (1000 * 60 * 60));
     }
 
-    // Get SyncManager status
-    let syncInProgress = false;
+    let syncInProgress = this.syncPromise !== null;
     let pendingSyncs = 0;
     try {
       const syncManager = getSyncManager();
-      syncInProgress = syncManager.isSyncing();
+      if (!syncInProgress) {
+        syncInProgress = syncManager.isSyncing();
+      }
       pendingSyncs = await syncManager.getPendingCount('menu');
     } catch (error) {
       console.warn('[MenuService] Could not get SyncManager status:', error);
@@ -432,18 +446,12 @@ class MenuService {
   // CACHE MANAGEMENT
   // ===========================================================================
 
-  /**
-   * ✅ UNCHANGED: Prefetch and cache menu data
-   * Used during app initialization to warm up cache
-   */
   async prefetchMenuData(): Promise<void> {
     try {
       console.log('[MenuService] Prefetching menu data...');
       
-      // Fetch all items (from cache)
       const items = await this.fetchMenuItems();
       
-      // Prefetch details for first few items
       const itemsToPrefetch = items.slice(0, 10);
       await this.fetchMultipleFoodDetails(itemsToPrefetch.map(i => i.id));
       
@@ -453,46 +461,33 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ UNCHANGED: Clear memory cache only
-   */
   clearCache(): void {
     this.detailsCache = {};
     console.log('[MenuService] Memory cache cleared');
   }
 
-  /**
-   * ✅ UNCHANGED: Clear all local storage cache
-   * WARNING: This will delete all offline data
-   */
   async clearAllCache(): Promise<void> {
     this.detailsCache = {};
     await menuOfflineAPI.clearCache();
     console.log('[MenuService] All cache cleared');
   }
 
-  /**
-   * ✅ UNCHANGED: Get cached detail from memory
-   */
   getCachedDetail(id: string): FoodItemDetail | undefined {
     return this.detailsCache[id];
   }
 
-  /**
-   * ✅ REFACTORED: Get cache info
-   * Now includes SyncManager info
-   */
   async getCacheInfo() {
     const offlineInfo = await menuOfflineAPI.getCacheInfo();
     const isOnline = await this.checkNetwork();
     const needsSync = await this.needsSync();
     
-    // Get SyncManager status
-    let syncInProgress = false;
+    let syncInProgress = this.syncPromise !== null;
     let pendingSyncs = 0;
     try {
       const syncManager = getSyncManager();
-      syncInProgress = syncManager.isSyncing();
+      if (!syncInProgress) {
+        syncInProgress = syncManager.isSyncing();
+      }
       pendingSyncs = await syncManager.getPendingCount('menu');
     } catch (error) {
       console.warn('[MenuService] Could not get SyncManager status:', error);
@@ -510,9 +505,6 @@ class MenuService {
     };
   }
 
-  /**
-   * ✅ UNCHANGED: Check if service is ready (has cached data)
-   */
   async isReady(): Promise<boolean> {
     return await menuOfflineAPI.hasCachedData();
   }
@@ -521,34 +513,23 @@ class MenuService {
   // CONFIGURATION & DIAGNOSTICS
   // ===========================================================================
 
-  /**
-   * ✅ UNCHANGED: Update config
-   */
   setConfig(config: Partial<MenuServiceConfig>): void {
-    // Prevent disabling offline-first
     const newConfig = { ...this.config, ...config };
-    newConfig.offlineFirst = true; // Always enforce offline-first
+    newConfig.offlineFirst = true;
     
     this.config = newConfig;
     console.log('[MenuService] Config updated:', this.config);
   }
 
-  /**
-   * ✅ UNCHANGED: Get current config
-   */
   getConfig(): MenuServiceConfig {
     return { ...this.config };
   }
 
-  /**
-   * ✅ NEW: Get SyncManager diagnostics for menu
-   */
   async getSyncDiagnostics(): Promise<any> {
     try {
       const syncManager = getSyncManager();
       const diagnostics = await syncManager.exportDiagnostics();
       
-      // Filter untuk menu-related data saja
       return {
         ...diagnostics,
         menuSpecific: {
@@ -556,6 +537,8 @@ class MenuService {
           lastSync: await menuOfflineAPI.getLastSync(),
           needsSync: await this.needsSync(),
           syncInterval: this.config.syncInterval,
+          syncInProgress: this.syncPromise !== null,
+          listenerCount: this.syncListeners.length,
         },
       };
     } catch (error) {
@@ -564,9 +547,6 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ NEW: Pause menu sync operations
-   */
   pauseSync(): void {
     try {
       const syncManager = getSyncManager();
@@ -577,9 +557,6 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ NEW: Resume menu sync operations
-   */
   resumeSync(): void {
     try {
       const syncManager = getSyncManager();
@@ -590,9 +567,6 @@ class MenuService {
     }
   }
 
-  /**
-   * ✅ NEW: Clear pending menu syncs
-   */
   async clearPendingSyncs(): Promise<void> {
     try {
       const syncManager = getSyncManager();

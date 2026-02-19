@@ -4,7 +4,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import CustomHeader from '@/app/components/customHeader';
 import { useAuth } from '@/app/contexts/authContext';
 import { useRouter } from 'expo-router';
-import { DataManagementService } from '@/app/services/dataManagementAPI';
+import { DataManagementService } from '@/app/services/pengaturan/dataManagementAPI';
 import { StorageStats } from '@/app/types/dataManagement';
 
 export default function ManajemenDataPage() {

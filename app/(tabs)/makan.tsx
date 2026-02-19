@@ -1,3 +1,16 @@
+/**
+ * camera.tsx (v2.1 - AI Photo Analysis Flow)
+ * ---------------------------------------------------------------------------
+ * Camera page with integrated AI food photo analysis.
+ * 
+ * v2.1 Changes:
+ * • ✅ AI photo analysis via OpenRouter GPT-4.1
+ * • ✅ Loading overlay during analysis
+ * • ✅ Result card showing detected foods + nutrition
+ * • ✅ Save analysis to scan history
+ * ---------------------------------------------------------------------------
+ */
+
 import { useState, useRef, useEffect } from 'react';
 import { router } from 'expo-router';
 import {
@@ -20,7 +33,10 @@ import Animated, {
 
 import { CameraFacing, CapturedPhoto } from '@/app/types/camera';
 import { CameraService } from '@/app/services/camera/cameraAPI';
+import { useCart } from '@/app/contexts/cartContext';
 import LoadingScreen from '@/app/components/loadingScreen';
+import AnalysisLoadingOverlay from '@/app/components/analysisLoadingOverlay';
+import AnalysisResultCard from '@/app/components/analysisResultCard';
 
 export default function CameraPage() {
   const [facing, setFacing] = useState<CameraFacing>('back');
@@ -29,7 +45,19 @@ export default function CameraPage() {
   const [showCamera, setShowCamera] = useState(false);
   const cameraRef = useRef<CameraView>(null);
 
-  // Animasi
+  // ✅ v2.1: Analysis state from context
+  const { 
+    isAnalyzing, 
+    analysisResult, 
+    analyzePhoto, 
+    savePhotoAnalysis,
+    clearAnalysisResult,
+  } = useCart();
+  
+  const [isSaving, setIsSaving] = useState(false);
+  const [showResult, setShowResult] = useState(false);
+
+  // Animations
   const scaleButton = useSharedValue(1);
   const opacityFlash = useSharedValue(0);
 
@@ -42,7 +70,6 @@ export default function CameraPage() {
   }));
 
   useEffect(() => {
-    // Request gallery permissions on mount
     (async () => {
       await CameraService.requestGalleryPermission();
     })();
@@ -73,6 +100,10 @@ export default function CameraPage() {
     );
   }
 
+  // =========================================================================
+  // Handlers
+  // =========================================================================
+
   const handleShowFoodList = () => {
     router.push('/laukList');
   };
@@ -81,13 +112,10 @@ export default function CameraPage() {
     if (!cameraRef.current) return;
 
     try {
-      // Animasi tombol
       scaleButton.value = withSequence(
         withSpring(0.9, { damping: 10 }),
         withSpring(1, { damping: 10 })
       );
-
-      // Animasi flash
       opacityFlash.value = withSequence(
         withTiming(1, { duration: 100 }),
         withTiming(0, { duration: 300 })
@@ -98,15 +126,6 @@ export default function CameraPage() {
       if (photo) {
         setCapturedImage(photo);
         setShowCamera(false);
-
-        Alert.alert(
-          'Foto Berhasil Diambil!',
-          'Foto siap untuk dianalisis. Anda bisa menambahkan logika analisis nutrisi di sini.',
-          [
-            { text: 'Ambil Ulang', onPress: () => setCapturedImage(null) },
-            { text: 'OK', style: 'cancel' },
-          ]
-        );
       }
     } catch (error) {
       console.error('Error mengambil foto:', error);
@@ -120,15 +139,6 @@ export default function CameraPage() {
       if (photo) {
         setCapturedImage(photo);
         setShowCamera(false);
-
-        Alert.alert(
-          'Gambar Berhasil Dipilih!',
-          'Gambar siap untuk dianalisis. Anda bisa menambahkan logika analisis nutrisi di sini.',
-          [
-            { text: 'Pilih Ulang', onPress: () => setCapturedImage(null) },
-            { text: 'OK', style: 'cancel' },
-          ]
-        );
       }
     } catch (error) {
       console.error('Error memilih gambar:', error);
@@ -138,24 +148,108 @@ export default function CameraPage() {
   const handleOpenCamera = () => {
     setShowCamera(true);
     setCapturedImage(null);
+    clearAnalysisResult();
+    setShowResult(false);
   };
 
   const toggleCameraFacing = () => {
     setFacing((current) => (current === 'back' ? 'front' : 'back'));
   };
 
+  // ✅ v2.1: Analyze photo with AI
   const handleAnalyzePhoto = async () => {
     if (!capturedImage) return;
-    await CameraService.analyzeFood(capturedImage.uri);
+
+    try {
+      const result = await analyzePhoto(capturedImage.uri);
+      
+      if (result.success) {
+        setShowResult(true);
+      } else {
+        Alert.alert(
+          'Analisis Gagal',
+          result.error || 'Tidak dapat menganalisis foto. Silakan coba lagi.',
+          [
+            { text: 'Coba Lagi', onPress: () => handleAnalyzePhoto() },
+            { text: 'Batal', style: 'cancel' },
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('Error analyzing photo:', error);
+      Alert.alert('Error', 'Terjadi kesalahan saat menganalisis foto');
+    }
   };
+
+  // ✅ v2.1: Save analysis result
+  const handleSaveAnalysis = async () => {
+    if (!analysisResult) return;
+
+    setIsSaving(true);
+    try {
+      const scan = await savePhotoAnalysis(analysisResult);
+      
+      if (scan) {
+        Alert.alert(
+          'Berhasil! 🎉',
+          'Hasil analisis telah disimpan ke riwayat.',
+          [{ text: 'OK', onPress: () => {
+            setShowResult(false);
+            setCapturedImage(null);
+            clearAnalysisResult();
+          }}]
+        );
+      } else {
+        Alert.alert('Error', 'Gagal menyimpan hasil analisis');
+      }
+    } catch (error) {
+      console.error('Error saving analysis:', error);
+      Alert.alert('Error', 'Gagal menyimpan hasil analisis');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRetake = () => {
+    setShowResult(false);
+    setCapturedImage(null);
+    clearAnalysisResult();
+  };
+
+  const handleDismissResult = () => {
+    setShowResult(false);
+    setCapturedImage(null);
+    clearAnalysisResult();
+  };
+
+  // =========================================================================
+  // RENDER: Analysis Result
+  // =========================================================================
+
+  if (showResult && analysisResult && analysisResult.success && capturedImage) {
+    return (
+      <AnalysisResultCard
+        photoUri={capturedImage.uri}
+        foods={analysisResult.foods}
+        totalNutrition={analysisResult.totalNutrition}
+        mealDescription={analysisResult.mealDescription}
+        onSave={handleSaveAnalysis}
+        onRetake={handleRetake}
+        onDismiss={handleDismissResult}
+        isSaving={isSaving}
+      />
+    );
+  }
+
+  // =========================================================================
+  // RENDER: Camera Mode
+  // =========================================================================
 
   if (showCamera && !capturedImage) {
     return (
       <View className="flex-1 bg-black">
-        {/* Camera View - TANPA CHILDREN */}
         <CameraView ref={cameraRef} style={{ flex: 1 }} facing={facing} />
 
-        {/* Overlay UI - DI LUAR CameraView dengan position absolute */}
         {/* Flash overlay */}
         <Animated.View
           style={flashAnimatedStyle}
@@ -166,10 +260,7 @@ export default function CameraPage() {
         {/* Top Controls */}
         <View className="absolute top-0 left-0 right-0 pt-12 px-6 flex-row justify-between items-center z-10">
           <TouchableOpacity
-            onPress={() => {
-              setShowCamera(false);
-              console.log('Tutup kamera');
-            }}
+            onPress={() => setShowCamera(false)}
             className="bg-black/50 rounded-full p-3"
             activeOpacity={0.75}
           >
@@ -185,7 +276,7 @@ export default function CameraPage() {
           </TouchableOpacity>
         </View>
 
-        {/* Scan Frame Overlay */}
+        {/* Scan Frame */}
         <View className="absolute inset-0 items-center justify-center px-8">
           <View
             className="w-full border-4 border-dashed border-white rounded-2xl opacity-60"
@@ -216,9 +307,16 @@ export default function CameraPage() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* ✅ Analysis Loading Overlay */}
+        <AnalysisLoadingOverlay visible={isAnalyzing} />
       </View>
     );
   }
+
+  // =========================================================================
+  // RENDER: Default View
+  // =========================================================================
 
   return (
     <ScrollView
@@ -231,7 +329,7 @@ export default function CameraPage() {
           Pindai Makanan
         </Text>
         <Text className="text-sm text-text-secondary mt-1">
-          Ambil foto untuk analisis nutrisi
+          Ambil foto untuk analisis nutrisi AI
         </Text>
       </View>
 
@@ -248,15 +346,12 @@ export default function CameraPage() {
               />
             ) : (
               <>
-                {/* Scan Frame */}
                 <View className="absolute inset-0 items-center justify-center px-8">
                   <View
                     className="w-full border-4 border-dashed border-white rounded-2xl opacity-60"
                     style={{ height: 256 }}
                   />
                 </View>
-
-                {/* Scan Icon */}
                 <View className="absolute inset-0 items-center justify-center">
                   <MaterialIcons
                     name="document-scanner"
@@ -274,12 +369,15 @@ export default function CameraPage() {
               <>
                 <TouchableOpacity
                   onPress={handleAnalyzePhoto}
-                  className="w-full bg-green-600 rounded-xl py-4 flex-row items-center justify-center gap-2"
+                  disabled={isAnalyzing}
+                  className={`w-full rounded-xl py-4 flex-row items-center justify-center gap-2 ${
+                    isAnalyzing ? 'bg-green-400' : 'bg-green-600'
+                  }`}
                   activeOpacity={0.75}
                 >
-                  <Ionicons name="checkmark-circle" size={22} color="#fff" />
+                  <Ionicons name="sparkles" size={22} color="#fff" />
                   <Text className="text-white font-semibold text-base">
-                    Analisis Foto
+                    {isAnalyzing ? 'Menganalisis...' : 'Analisis dengan AI'}
                   </Text>
                 </TouchableOpacity>
 
@@ -360,6 +458,9 @@ export default function CameraPage() {
           </View>
         </View>
       </View>
+
+      {/* ✅ Analysis Loading Overlay */}
+      <AnalysisLoadingOverlay visible={isAnalyzing} />
     </ScrollView>
   );
 }

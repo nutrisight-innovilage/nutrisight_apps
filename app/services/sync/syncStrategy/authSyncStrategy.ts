@@ -144,15 +144,13 @@ export class AuthSyncStrategy implements SyncStrategy {
   /**
    * Sync offline registration to Appwrite
    */
-  private async syncRegistration(data: AuthSyncData): Promise<RegisterSyncResult> {
+ private async syncRegistration(data: AuthSyncData): Promise<RegisterSyncResult> {
     if (!data.registerData) {
       throw new Error('Register data is required');
     }
 
     console.log('[AuthSyncStrategy] Syncing registration...');
     
-    // Note: In Appwrite, registration creates both Account and Session
-    // We need to check if user already exists first
     try {
       const result = await authOnlineAPI.register(data.registerData);
       
@@ -162,15 +160,43 @@ export class AuthSyncStrategy implements SyncStrategy {
         token: result.token,
       };
     } catch (error: any) {
-      // If email already exists, this is expected for offline-first
       if (error.message?.includes('already exists') || error.message?.includes('email')) {
         console.warn('[AuthSyncStrategy] User already registered on server');
         
-        // Try to login instead
+        // Login instead (clearExistingSession is now handled inside login)
         const loginResult = await authOnlineAPI.login({
           email: data.registerData.email,
           password: data.registerData.password,
         });
+
+        // Ensure user document exists in database
+        try {
+          const { databases, DATABASE_ID, COLLECTIONS } = await import('@/app/config/appwriteConfig');
+          try {
+            await databases.getDocument(DATABASE_ID, COLLECTIONS.USERS, loginResult.user.id);
+          } catch {
+            // Document doesn't exist, create it
+            await databases.createDocument(
+              DATABASE_ID,
+              COLLECTIONS.USERS,
+              loginResult.user.id,
+              {
+                email: data.registerData.email,
+                name: data.registerData.name,
+                age: parseInt(data.registerData.age) || 0,
+                weight: parseFloat(data.registerData.weight) || 0,
+                height: parseFloat(data.registerData.height) || 0,
+                gender: data.registerData.gender,
+                role: data.registerData.role,
+                phone: data.registerData.phone || null,
+                updatedAt: new Date().toISOString(),
+              }
+            );
+            console.log('[AuthSyncStrategy] Created missing user document');
+          }
+        } catch (dbErr) {
+          console.warn('[AuthSyncStrategy] Could not ensure user document:', dbErr);
+        }
         
         return {
           action: 'register',
