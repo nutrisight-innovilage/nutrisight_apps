@@ -4,7 +4,7 @@
  * Shows the result of AI food photo analysis.
  * Displays detected foods, confidence, and total nutrition.
  * 
- * Actions: Save to history, Retake photo, Dismiss
+ * Actions: Save to history, View history, Retake photo, Dismiss
  * ---------------------------------------------------------------------------
  */
 
@@ -38,6 +38,8 @@ interface AnalysisResultCardProps {
   onRetake: () => void;
   /** Dismiss / close */
   onDismiss: () => void;
+  /** Navigate to history screen */
+  onViewHistory?: () => void;
   /** Whether save is in progress */
   isSaving?: boolean;
 }
@@ -70,6 +72,7 @@ export default function AnalysisResultCard({
   onSave,
   onRetake,
   onDismiss,
+  onViewHistory,
   isSaving = false,
 }: AnalysisResultCardProps) {
   return (
@@ -240,6 +243,20 @@ export default function AnalysisResultCard({
             {isSaving ? 'Menyimpan...' : 'Simpan ke Riwayat'}
           </Text>
         </TouchableOpacity>
+
+        {/* View History Button */}
+        {onViewHistory && (
+          <TouchableOpacity
+            onPress={onViewHistory}
+            className="w-full mt-3 bg-blue-600 rounded-xl py-3 flex-row items-center justify-center"
+            activeOpacity={0.75}
+          >
+            <Ionicons name="time" size={20} color="#fff" />
+            <Text className="text-white font-semibold text-base ml-2">
+              Lihat Riwayat
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* Retake Button */}
         <TouchableOpacity

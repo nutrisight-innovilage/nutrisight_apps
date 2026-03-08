@@ -1,8 +1,7 @@
 /**
- * authService.ts (REFACTORED - SyncManager Integration)
+ * authService.ts (REFACTORED - SyncManager Integration + DB Document Check)
  * ---------------------------------------------------------------------------
  * TRUE OFFLINE-FIRST dengan SyncManager integration.
- * Mengikuti pattern dari cartContext.tsx untuk consistency.
  * 
  * REFACTORED CHANGES:
  * • ✅ Semua write operations menggunakan authOfflineAPI (offline-first)
@@ -10,14 +9,10 @@
  * • ✅ Background sync handled by SyncManager automatically
  * • ✅ Network detection handled by SyncManager
  * • ✅ Retry logic handled by SyncManager
+ * • ✅ getCurrentUser detects missing DB document → warns user
  * • ❌ REMOVED: Manual queue operations
  * • ❌ REMOVED: Manual server API calls
  * • ❌ REMOVED: Custom background sync methods
- * 
- * Flow Pattern (sama seperti cartContext):
- * 1. Write to local storage (authOfflineAPI)
- * 2. Queue for sync (SyncManager.sync)
- * 3. SyncManager handles rest automatically
  * ---------------------------------------------------------------------------
  */
 
@@ -80,16 +75,35 @@ class AuthService {
   }
 
   // ===========================================================================
+  // ✅ DB DOCUMENT VALIDATION
+  // ===========================================================================
+
+  /**
+   * Check if user has required fields that indicate a valid DB document.
+   * 
+   * Appwrite Auth only provides: email, name, phone
+   * Database document also has: age, weight, height, gender, role
+   * 
+   * If age/weight/height are all 0 → user exists in Auth but NOT in Database.
+   */
+  private isUserMissingDbDocument(user: User): boolean {
+    // These fields are required in DB document and cannot be 0 for a real user
+    const hasNoAge = !user.age || user.age === 0;
+    const hasNoWeight = !user.weight || user.weight === 0;
+    const hasNoHeight = !user.height || user.height === 0;
+    const hasNoGender = !user.gender || user.gender === 'male'; // default fallback from convertAppwriteUser
+    const hasNoRole = !user.role || user.role === 'dewasa';     // default fallback from convertAppwriteUser
+
+    // If ALL critical fields are defaults/zero → DB document is missing
+    return hasNoAge && hasNoWeight && hasNoHeight;
+  }
+
+  // ===========================================================================
   // OFFLINE-FIRST OPERATIONS (REFACTORED)
   // ===========================================================================
 
   /**
    * ✅ REFACTORED: Register new user
-   * 
-   * Flow:
-   * 1. Save locally (authOfflineAPI.register)
-   * 2. Queue for sync (SyncManager.sync)
-   * 3. SyncManager handles upload & retry automatically
    */
   async register(data: RegisterRequest): Promise<AuthResponse> {
     try {
@@ -108,7 +122,6 @@ class AuthService {
           });
           console.log('[AuthService] 📋 Registration queued for sync');
         } catch (syncErr) {
-          // Non-blocking - local data already saved
           console.warn('[AuthService] Failed to queue sync, will retry later:', syncErr);
         }
       }
@@ -121,12 +134,7 @@ class AuthService {
   };
 
   /**
-   * ✅ REFACTORED: Login user
-   * 
-   * Flow:
-   * 1. Try local login first (authOfflineAPI.login)
-   * 2. If fails and online, try server (authOnlineAPI.login)
-   * 3. Trigger sync on login if enabled
+   * ✅ REFACTORED: Login user (with DB document check)
    */
   async login(data: LoginRequest): Promise<AuthResponse> {
     try {
@@ -150,7 +158,25 @@ class AuthService {
         }
       }
 
-      // 2. Trigger sync on login if enabled
+      // 2. ✅ Check if user has a valid DB document
+      if (this.isUserMissingDbDocument(authData.user)) {
+        console.error('═══════════════════════════════════════════════════════════');
+        console.error('[AuthService] ❌ AKUN TIDAK LENGKAP');
+        console.error('[AuthService] User terdaftar di Appwrite Auth tapi TIDAK ada di Database.');
+        console.error('[AuthService] Data profil (umur, berat, tinggi, dll) tidak ditemukan.');
+        console.error('[AuthService] → Mohon HAPUS akun ini dan DAFTAR ULANG saat online.');
+        console.error(`[AuthService] User ID: ${authData.user.id}`);
+        console.error(`[AuthService] Email: ${authData.user.email}`);
+        console.error('═══════════════════════════════════════════════════════════');
+
+        // Throw error so UI can handle it
+        throw new Error(
+          'Akun tidak lengkap: data profil tidak ditemukan di database. ' +
+          'Mohon hapus akun dan daftar ulang saat online.'
+        );
+      }
+
+      // 3. Trigger sync on login if enabled
       if (this.config.syncOnLogin) {
         this.triggerLoginSync(authData.token);
       }
@@ -164,10 +190,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Logout user
-   * 
-   * Flow:
-   * 1. Clear local data (authOfflineAPI.logout)
-   * 2. Queue logout notification for server (SyncManager.sync)
    */
   async logout(token?: string): Promise<void> {
     try {
@@ -195,12 +217,35 @@ class AuthService {
   }
 
   /**
-   * ✅ UNCHANGED: Get current user
-   * ALWAYS reads from local storage (fastest, most reliable)
+   * ✅ UPDATED: Get current user (with DB document validation)
+   * 
+   * ALWAYS reads from local storage (fastest, most reliable).
+   * Now also checks if the user has a valid DB document.
+   * Returns null if user data is incomplete (missing DB document).
    */
   async getCurrentUser(): Promise<AuthResponse | null> {
     try {
-      return await authOfflineAPI.getCurrentUser();
+      const authData = await authOfflineAPI.getCurrentUser();
+      
+      if (!authData) {
+        return null;
+      }
+
+      // ✅ Validate that user has a DB document (not just Auth account)
+      if (this.isUserMissingDbDocument(authData.user)) {
+        console.warn('──────────────────────────────────────────────────────');
+        console.warn('[AuthService] ⚠️ AKUN TIDAK LENGKAP TERDETEKSI');
+        console.warn('[AuthService] User ada di Auth tapi TIDAK di Database.');
+        console.warn(`[AuthService] User: ${authData.user.email} (${authData.user.id})`);
+        console.warn('[AuthService] → Hapus akun dan daftar ulang saat online.');
+        console.warn('──────────────────────────────────────────────────────');
+        
+        // Return null — treat as unauthenticated
+        // This prevents downstream errors like "User not authenticated" in mealService
+        return null;
+      }
+
+      return authData;
     } catch (error) {
       console.error('[AuthService] Failed to get current user:', error);
       return null;
@@ -217,11 +262,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Update user profile
-   * 
-   * Flow:
-   * 1. Update locally (authOfflineAPI.updateUser)
-   * 2. Queue for sync (SyncManager.sync)
-   * 3. SyncManager handles upload & retry
    */
   async updateUser(
     userId: string,
@@ -244,7 +284,6 @@ class AuthService {
         });
         console.log('[AuthService] 📋 Profile update queued for sync');
       } catch (syncErr) {
-        // Non-blocking - local data already saved
         console.warn('[AuthService] Failed to queue sync, will retry later:', syncErr);
       }
 
@@ -257,10 +296,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Delete user account
-   * 
-   * Flow:
-   * 1. Delete locally (authOfflineAPI.deleteAccount)
-   * 2. Queue deletion notification (SyncManager.sync)
    */
   async deleteAccount(userId: string, token?: string): Promise<void> {
     try {
@@ -290,10 +325,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Change password
-   * 
-   * Flow:
-   * 1. Change locally (authOfflineAPI.changePassword)
-   * 2. Queue for sync (SyncManager.sync)
    */
   async changePassword(
     userId: string,
@@ -330,11 +361,9 @@ class AuthService {
 
   /**
    * ✅ UNCHANGED: Check if email is available (HYBRID)
-   * Prefers online for accuracy, falls back to local
    */
   async checkEmailAvailable(email: string): Promise<boolean> {
     try {
-      // Try online first for most accurate result
       if (this.isOnline) {
         try {
           return await authOnlineAPI.checkEmailAvailable(email);
@@ -342,8 +371,6 @@ class AuthService {
           console.warn('[AuthService] Online email check failed, using local');
         }
       }
-
-      // Fallback to offline check
       return await authOfflineAPI.checkEmailAvailable(email);
     } catch (error) {
       console.error('[AuthService] Email availability check failed:', error);
@@ -353,14 +380,12 @@ class AuthService {
 
   /**
    * ✅ UNCHANGED: Verify token (ONLINE-ONLY)
-   * Token verification requires server
    */
   async verifyToken(token: string): Promise<AuthResponse> {
     try {
       if (!this.isOnline) {
         throw new Error('Cannot verify token offline');
       }
-
       return await authOnlineAPI.verifyToken(token);
     } catch (error) {
       console.error('[AuthService] Token verification failed:', error);
@@ -370,14 +395,12 @@ class AuthService {
 
   /**
    * ✅ UNCHANGED: Refresh token (ONLINE-ONLY)
-   * Token refresh requires server
    */
   async refreshToken(refreshToken: string): Promise<AuthResponse> {
     try {
       if (!this.isOnline) {
         throw new Error('Cannot refresh token offline');
       }
-
       return await authOnlineAPI.refreshToken(refreshToken);
     } catch (error) {
       console.error('[AuthService] Token refresh failed:', error);
@@ -390,14 +413,12 @@ class AuthService {
   // ===========================================================================
 
   /**
-   * ✅ NEW: Trigger sync on login
-   * SyncManager will process all pending auth operations
+   * ✅ Trigger sync on login
    */
   private triggerLoginSync(token: string): void {
     try {
       const syncManager = getSyncManager();
       
-      // SyncManager will automatically sync all pending 'auth' items
       syncManager.syncType('auth').then(result => {
         if (result.success) {
           console.log(`[AuthService] ✅ Login sync complete - ${result.processedCount} items synced`);
@@ -414,7 +435,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Manually sync pending updates
-   * Now uses SyncManager.syncType('auth')
    */
   async syncPendingUpdates(token: string): Promise<{
     success: boolean;
@@ -425,14 +445,9 @@ class AuthService {
       const isOnline = await this.checkNetwork();
 
       if (!isOnline) {
-        return {
-          success: false,
-          syncedCount: 0,
-          errors: ['Device is offline'],
-        };
+        return { success: false, syncedCount: 0, errors: ['Device is offline'] };
       }
 
-      // Use SyncManager to sync all pending 'auth' items
       const syncManager = getSyncManager();
       const result = await syncManager.syncType('auth');
 
@@ -453,7 +468,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Manually sync user profile
-   * This now just triggers a profile fetch from server
    */
   async syncUserProfile(token: string): Promise<boolean> {
     try {
@@ -464,10 +478,7 @@ class AuthService {
         return false;
       }
 
-      // Fetch fresh profile from server
       const serverProfile = await authOnlineAPI.verifyToken(token);
-      
-      // Save to local storage
       await authOfflineAPI.saveUserFromServer(serverProfile.user);
       
       console.log('[AuthService] ✅ Profile synced from server');
@@ -480,7 +491,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Get pending updates count
-   * Now checks SyncManager queue instead of local storage
    */
   async getPendingUpdatesCount(): Promise<number> {
     try {
@@ -494,7 +504,6 @@ class AuthService {
 
   /**
    * ✅ REFACTORED: Force sync all pending data
-   * Now uses SyncManager.syncType('auth')
    */
   async forceSyncAll(token: string): Promise<{
     success: boolean;
@@ -504,17 +513,11 @@ class AuthService {
       const isOnline = await this.checkNetwork();
 
       if (!isOnline) {
-        return {
-          success: false,
-          message: 'Device is offline - cannot sync',
-        };
+        return { success: false, message: 'Device is offline - cannot sync' };
       }
 
-      // Sync all pending auth items
       const syncManager = getSyncManager();
       const result = await syncManager.syncType('auth');
-
-      // Also sync profile from server
       await this.syncUserProfile(token);
 
       return {
@@ -536,10 +539,6 @@ class AuthService {
   // STATUS & DIAGNOSTICS (REFACTORED)
   // ===========================================================================
 
-  /**
-   * ✅ REFACTORED: Check sync status
-   * Now includes SyncManager status
-   */
   async getSyncStatus(): Promise<{
     isOnline: boolean;
     pendingUpdates: number;
@@ -556,16 +555,9 @@ class AuthService {
       console.warn('[AuthService] Could not get SyncManager status:', error);
     }
 
-    return {
-      isOnline,
-      pendingUpdates,
-      syncManagerStatus,
-    };
+    return { isOnline, pendingUpdates, syncManagerStatus };
   }
 
-  /**
-   * ✅ NEW: Get detailed sync diagnostics
-   */
   async getSyncDiagnostics(): Promise<any> {
     try {
       const syncManager = getSyncManager();
@@ -576,9 +568,6 @@ class AuthService {
     }
   }
 
-  /**
-   * ✅ NEW: Pause sync operations
-   */
   pauseSync(): void {
     try {
       const syncManager = getSyncManager();
@@ -589,9 +578,6 @@ class AuthService {
     }
   }
 
-  /**
-   * ✅ NEW: Resume sync operations
-   */
   resumeSync(): void {
     try {
       const syncManager = getSyncManager();
@@ -606,24 +592,15 @@ class AuthService {
   // CONFIGURATION
   // ===========================================================================
 
-  /**
-   * ✅ UNCHANGED: Update config
-   */
   setConfig(config: Partial<AuthServiceConfig>): void {
     this.config = { ...this.config, ...config };
     console.log('[AuthService] Config updated:', this.config);
   }
 
-  /**
-   * ✅ UNCHANGED: Get current config
-   */
   getConfig(): AuthServiceConfig {
     return { ...this.config };
   }
 
-  /**
-   * ✅ UNCHANGED: Clear all local data
-   */
   async clearAllData(): Promise<void> {
     await authOfflineAPI.clearAllData();
     console.log('[AuthService] All local data cleared');

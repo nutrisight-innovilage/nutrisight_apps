@@ -1,15 +1,17 @@
 {
+    
   "expo": {
     "name": "Nutrisight",
     "slug": "Nutrisight",
+    "scheme": "nutrisight",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/images/nutrisight.jpg",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/images/nutrisight.jpg",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#37B37E"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -27,8 +29,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/images/nutrisight.jpg",
+        "backgroundColor": "#37B37E"
       },
       "package": "com.innovilage.nutrisight",
       "permissions": [
@@ -41,11 +43,13 @@
         "POST_NOTIFICATIONS",
         "VIBRATE",
         "ACCESS_NETWORK_STATE",
+        "SCHEDULE_EXACT_ALARM",
+  "RECEIVE_BOOT_COMPLETED",
         "INTERNET"
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/images/nutrisight-notification.png"
     },
     "plugins": [
       [
@@ -66,8 +70,8 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/notification-icon.png",
-          "color": "#ffffff",
+          "icon": "./assets/images/nutrisight-notification.png",
+          "color": "#dcfce7",
           "sounds": []
         }
       ]

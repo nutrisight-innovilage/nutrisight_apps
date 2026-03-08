@@ -12,9 +12,10 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Text, View, ScrollView, Pressable, Alert, RefreshControl } from 'react-native';
+import { Text, View, ScrollView, Pressable, Alert, RefreshControl, TouchableOpacity } from 'react-native';
 import { VictoryPie } from 'victory-native';
 import Svg from 'react-native-svg';
+import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { NutritionScan, ChartDataPoint } from '@/app/types/meal';
 import { 
@@ -131,6 +132,11 @@ export default function Index() {
     allGood: todayStats.balancedMealsCount === todayStats.mealsCount,
     goodCount: todayStats.balancedMealsCount,
   } : null;
+
+  const onViewHistory = () => {
+    console.log('Navigating to History screen...');
+    router.push('/history');
+  };
 
   return (
     <View className="flex-1 bg-gray-50">
@@ -295,6 +301,10 @@ export default function Index() {
             <Text className="text-lg font-semibold text-gray-900">
               Riwayat Pemindaian
             </Text>
+            <TouchableOpacity onPress={onViewHistory} className="flex-row items-center">
+              <Feather name="refresh-cw" size={16} color="#10b981" />
+              <Text className="text-xs text-green-600 ml-1">Lihat secara lengkap</Text>
+            </TouchableOpacity>
             <Text className="text-sm text-gray-500">
               {recentScans.length} makanan
             </Text>

@@ -203,6 +203,7 @@ npm-debug.*
 *.mobileprovision
 *.orig.*
 web-build/
+assets/images-example/
 
 # Node
 node_modules/

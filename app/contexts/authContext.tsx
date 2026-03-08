@@ -1,17 +1,14 @@
 /**
- * authContext.tsx
+ * authContext.tsx (UPDATED - Offline Handling)
  * ---------------------------------------------------------------------------
- * Slim context wrapper untuk authentication.
- * Business logic ada di authService.
- * 
- * Context hanya:
- * • Menyimpan state
- * • Provide data ke children
- * • Wrapper untuk service calls
+ * • ✅ Added isOffline state + network listener
+ * • ✅ Login/register/sync show offline-aware errors
+ * • ✅ Offline-safe operations (logout, local reads) still work
  * ---------------------------------------------------------------------------
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import NetInfo from '@react-native-community/netinfo';
 import { User, UpdateUserRequest } from '@/app/types/user';
 import authService from '@/app/services/auth/authService';
 
@@ -23,11 +20,12 @@ interface AuthContextType {
   // Data
   user: User | null;
   token: string | null;
-  
+
   // States
   loading: boolean;
   isAuthenticated: boolean;
-  
+  isOffline: boolean;
+
   // Actions
   login: (email: string, password: string) => Promise<void>;
   register: (data: any) => Promise<void>;
@@ -35,7 +33,7 @@ interface AuthContextType {
   updateUser: (userData: UpdateUserRequest) => Promise<void>;
   deleteAccount: () => Promise<void>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
-  
+
   // Sync
   syncProfile: () => Promise<boolean>;
   syncPendingUpdates: () => Promise<{
@@ -61,27 +59,33 @@ interface AuthProviderProps {
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  // State
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
 
-  // Derived state
   const isAuthenticated = user !== null;
 
   // ---------------------------------------------------------------------------
-  // Actions - delegated to service
+  // Network listener
   // ---------------------------------------------------------------------------
 
-  /**
-   * Load user from storage
-   */
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setIsOffline(!(state.isConnected ?? true));
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+
   const loadUser = useCallback(async () => {
     try {
       setLoading(true);
-      
       const authData = await authService.getCurrentUser();
-      
       if (authData) {
         setUser(authData.user);
         setToken(authData.token);
@@ -94,27 +98,35 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   /**
-   * Login
+   * Login — works offline if user data cached locally,
+   * otherwise needs network.
    */
   const login = useCallback(async (email: string, password: string) => {
     try {
       const authData = await authService.login({ email, password });
-      
       setUser(authData.user);
       setToken(authData.token);
     } catch (error) {
-      console.error('[AuthContext] Login error:', error);
+      // If offline and local login also failed → clear message
+      const netState = await NetInfo.fetch();
+      if (!netState.isConnected) {
+        throw new Error('Tidak ada koneksi internet. Login membutuhkan koneksi untuk pertama kali.');
+      }
       throw error;
     }
   }, []);
 
   /**
-   * Register
+   * Register — needs network (cannot register offline).
    */
   const register = useCallback(async (data: any) => {
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected) {
+      throw new Error('Tidak ada koneksi internet. Pendaftaran membutuhkan koneksi internet.');
+    }
+
     try {
       const authData = await authService.register(data);
-      
       setUser(authData.user);
       setToken(authData.token);
     } catch (error) {
@@ -124,35 +136,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   /**
-   * Logout
+   * Logout — always works (clears local state).
    */
   const logout = useCallback(async () => {
     try {
       await authService.logout(token || undefined);
-      
-      setUser(null);
-      setToken(null);
     } catch (error) {
       console.error('[AuthContext] Logout error:', error);
-      // Still clear local state even if error
+    } finally {
+      // Always clear local state
       setUser(null);
       setToken(null);
     }
   }, [token]);
 
   /**
-   * Update user profile
+   * Update profile — saved locally first, synced when online.
    */
   const updateUser = useCallback(async (userData: UpdateUserRequest) => {
-    try {
-      if (!user || !token) {
-        throw new Error('No user logged in');
-      }
+    if (!user || !token) {
+      throw new Error('No user logged in');
+    }
 
+    try {
       const authData = await authService.updateUser(user.id, userData, token);
-      
       setUser(authData.user);
-      // Token might be updated
       if (authData.token) {
         setToken(authData.token);
       }
@@ -163,16 +171,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, [user, token]);
 
   /**
-   * Delete account
+   * Delete account — needs network.
    */
   const deleteAccount = useCallback(async () => {
-    try {
-      if (!user) {
-        throw new Error('No user logged in');
-      }
+    if (!user) {
+      throw new Error('No user logged in');
+    }
 
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected) {
+      throw new Error('Tidak ada koneksi internet. Penghapusan akun membutuhkan koneksi internet.');
+    }
+
+    try {
       await authService.deleteAccount(user.id, token || undefined);
-      
       setUser(null);
       setToken(null);
     } catch (error) {
@@ -182,14 +194,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, [user, token]);
 
   /**
-   * Change password
+   * Change password — saved locally, synced when online.
    */
   const changePassword = useCallback(async (oldPassword: string, newPassword: string) => {
-    try {
-      if (!user) {
-        throw new Error('No user logged in');
-      }
+    if (!user) {
+      throw new Error('No user logged in');
+    }
 
+    try {
       await authService.changePassword(user.id, oldPassword, newPassword, token || undefined);
     } catch (error) {
       console.error('[AuthContext] Change password error:', error);
@@ -198,22 +210,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, [user, token]);
 
   /**
-   * Sync profile from server
+   * Sync profile — needs network.
    */
   const syncProfile = useCallback(async (): Promise<boolean> => {
-    try {
-      if (!token) {
-        console.warn('[AuthContext] Cannot sync profile - no token');
-        return false;
-      }
+    if (!token) {
+      console.warn('[AuthContext] Cannot sync profile - no token');
+      return false;
+    }
 
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected) {
+      console.warn('[AuthContext] Cannot sync profile - offline');
+      return false;
+    }
+
+    try {
       const success = await authService.syncUserProfile(token);
-      
-      // Reload user if sync successful
       if (success) {
         await loadUser();
       }
-      
       return success;
     } catch (error) {
       console.error('[AuthContext] Sync profile error:', error);
@@ -222,28 +237,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, [token, loadUser]);
 
   /**
-   * Sync pending updates
+   * Sync pending updates — needs network.
    */
   const syncPendingUpdates = useCallback(async () => {
-    try {
-      if (!token) {
-        return {
-          success: false,
-          syncedCount: 0,
-          errors: ['No token available'],
-        };
-      }
+    if (!token) {
+      return { success: false, syncedCount: 0, errors: ['No token available'] };
+    }
 
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected) {
+      return { success: false, syncedCount: 0, errors: ['Tidak ada koneksi internet'] };
+    }
+
+    try {
       const result = await authService.syncPendingUpdates(token);
-      
-      // Reload user if any updates were synced
       if (result.syncedCount > 0) {
         await loadUser();
       }
-      
       return result;
     } catch (error) {
-      console.error('[AuthContext] Sync pending updates error:', error);
       return {
         success: false,
         syncedCount: 0,
@@ -252,14 +264,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [token, loadUser]);
 
-  /**
-   * Get pending updates count
-   */
   const getPendingUpdatesCount = useCallback(async (): Promise<number> => {
     try {
       return await authService.getPendingUpdatesCount();
     } catch (error) {
-      console.error('[AuthContext] Get pending updates count error:', error);
       return 0;
     }
   }, []);
@@ -268,7 +276,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  // Load user on mount
   useEffect(() => {
     loadUser();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -279,23 +286,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // ---------------------------------------------------------------------------
 
   const value: AuthContextType = {
-    // Data
     user,
     token,
-    
-    // States
     loading,
     isAuthenticated,
-    
-    // Actions
+    isOffline,
     login,
     register,
     logout,
     updateUser,
     deleteAccount,
     changePassword,
-    
-    // Sync
     syncProfile,
     syncPendingUpdates,
     getPendingUpdatesCount,
@@ -308,9 +309,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 // Hook
 // ---------------------------------------------------------------------------
 
-/**
- * Custom hook to use auth context
- */
 export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
   if (context === undefined) {

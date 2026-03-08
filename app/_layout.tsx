@@ -24,8 +24,8 @@ import Animated, {
 
 // Providers (imported AFTER syncInit — MenuService singleton is now safe)
 import { AuthProvider } from '@/app/contexts/authContext';
-import { MenuProvider } from './contexts/menuContext';
-import { CartProvider } from './contexts/cartContext';
+import { MenuProvider } from '@/app/contexts/menuContext';
+import { CartProvider } from '@/app/contexts/cartContext';
 
 // ============================================================================
 // Sync Initialization Component

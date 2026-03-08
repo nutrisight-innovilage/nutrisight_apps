@@ -41,6 +41,7 @@ const STORAGE_KEYS = {
   FOOD_NUTRITION_DB: '@nutrition_analysis:food_nutrition_db',
   NUTRITION_GOALS_PREFIX: '@nutrition_analysis:goals_',
   THRESHOLDS_PREFIX: '@nutrition_analysis:thresholds_',
+  FOOD_CATALOG: '@nutrition_analysis:food_catalog',
   
   // Nutrition Analysis - Sync status
   LAST_SYNC_TIME: '@nutrition_analysis:last_sync_time',

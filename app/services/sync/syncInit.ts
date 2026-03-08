@@ -26,10 +26,10 @@
 
 import { getSyncManager } from '@/app/services/sync/syncManager';
 import { getSyncQueue } from '@/app/services/sync/syncQueue';
-import authSyncStrategy from '@/app/services/sync/syncStrategy/authSyncStrategy';
-import { mealSyncStrategy } from '@/app/services/sync/syncStrategy/mealSyncStrategy';
-import menuSyncStrategy from '@/app/services/sync/syncStrategy/menuSyncStrategy';
-import { photoSyncStrategy } from '@/app/services/sync/syncStrategy/photoSyncStrategy';
+import authSyncStrategy from '@/app/services/auth/authSyncStrategy'
+import { mealSyncStrategy } from '@/app/services/meal/mealSyncStrategy';
+import menuSyncStrategy from '@/app/services/menu/menuSyncStrategy';
+import { photoSyncStrategy } from '@/app/services/camera/photoSyncStrategy';
 
 // ---------------------------------------------------------------------------
 // Create instances (synchronous — no AsyncStorage access yet)

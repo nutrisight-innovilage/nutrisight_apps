@@ -221,7 +221,7 @@ export function appwriteToFoodItemDetail(
   return {
     id: doc.$id,
     foodName: doc.foodName,
-    description: doc.description,
+    description: doc.description, // desccription aslinya adalah bahan makanan
     imageUrl: doc.imageUrl,
     category: doc.category,
     nutrition: doc.nutrition,

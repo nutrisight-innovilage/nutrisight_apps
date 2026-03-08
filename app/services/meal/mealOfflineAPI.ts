@@ -86,6 +86,7 @@ const STORAGE_KEYS = {
   // Goals & thresholds cache
   NUTRITION_GOALS_PREFIX: '@nutrition_analysis:goals_',
   THRESHOLDS_PREFIX: '@nutrition_analysis:thresholds_',
+  WEEKLY_INSIGHT_CACHE: '@nutrition_analysis:weekly_insight_cache',
   
   // Sync status
   LAST_SYNC_TIME: '@nutrition_analysis:last_sync_time',
@@ -399,6 +400,75 @@ export class MealOfflineAPI {
 
     await saveToStorage(key, thresholds);
     return thresholds;
+  }
+   // =========================================================================
+  // WEEKLY INSIGHT CACHE (v2.3 — for scheduled DB saves)
+  // =========================================================================
+
+  /**
+   * Save weekly insight to local cache.
+   * Key format: `{userId}_{startDate}` for deduplication.
+   */
+  static async saveWeeklyInsightCache(
+    userId: string,
+    startDate: string,
+    insight: WeeklyInsight
+  ): Promise<void> {
+    try {
+      const allCache = await loadFromStorage<Record<string, WeeklyInsight & { savedAt: string }>>(
+        STORAGE_KEYS.WEEKLY_INSIGHT_CACHE
+      ) || {};
+
+      const key = `${userId}_${startDate.split('T')[0]}`;
+      allCache[key] = {
+        ...insight,
+        savedAt: new Date().toISOString(),
+      };
+
+      await saveToStorage(STORAGE_KEYS.WEEKLY_INSIGHT_CACHE, allCache);
+      console.log(`[MealOfflineAPI] ✅ Weekly insight cached for ${key}`);
+    } catch (error) {
+      console.error('[MealOfflineAPI] Failed to save weekly insight cache:', error);
+    }
+  }
+
+  /**
+   * Check if weekly insight is already saved for a given week.
+   */
+  static async isWeeklyInsightSaved(userId: string, startDate: string): Promise<boolean> {
+    try {
+      const allCache = await loadFromStorage<Record<string, any>>(
+        STORAGE_KEYS.WEEKLY_INSIGHT_CACHE
+      );
+      if (!allCache) return false;
+
+      const key = `${userId}_${startDate.split('T')[0]}`;
+      return key in allCache;
+    } catch (error) {
+      console.error('[MealOfflineAPI] Failed to check weekly insight cache:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get cached weekly insight for a given week.
+   */
+  static async getWeeklyInsightCache(
+    userId: string,
+    startDate: string
+  ): Promise<(WeeklyInsight & { savedAt: string }) | null> {
+    try {
+      const allCache = await loadFromStorage<Record<string, WeeklyInsight & { savedAt: string }>>(
+        STORAGE_KEYS.WEEKLY_INSIGHT_CACHE
+      );
+      if (!allCache) return null;
+
+      const key = `${userId}_${startDate.split('T')[0]}`;
+      return allCache[key] || null;
+    } catch (error) {
+      console.error('[MealOfflineAPI] Failed to get weekly insight cache:', error);
+      return null;
+    }
   }
 
     static async getWeeklyInsights(

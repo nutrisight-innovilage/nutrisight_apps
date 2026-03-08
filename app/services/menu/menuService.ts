@@ -145,10 +145,11 @@ class MenuService {
       // Syncing thousands of items takes time, especially on slow connections
       const timeout = forceRefresh ? 180000 : 120000; // 3min for force, 2min for normal
       const success = await this.waitForSyncComplete(timeout);
+      // ✅ FIX: "no changes" bukan berarti gagal — cek apakah cache ada isi
+      const hasData = (await menuOfflineAPI.fetchMenuItems()).length > 0;
+      this.notifySyncListeners(success || hasData);
 
-      this.notifySyncListeners(success);
-
-      return success;
+      return success || hasData;
     } catch (error) {
       console.error('[MenuService] executeSync failed:', error);
       this.notifySyncListeners(false);
@@ -346,12 +347,19 @@ class MenuService {
   async syncMenu(forceRefresh: boolean = false): Promise<boolean> {
     try {
       const isOnline = await this.checkNetwork();
+      const cachedItems = await menuOfflineAPI.fetchMenuItems();
+
+      // ✅ Auto-recovery: cache kosong → paksa full sync
+      if (cachedItems.length === 0) {
+        console.warn('[MenuService] ⚠️ Cache empty — forcing full resync');
+        forceRefresh = true;
+      }
 
       if (!isOnline) {
         console.warn('[MenuService] Cannot sync - device is offline');
         return false;
       }
-
+      
       if (this.syncPromise) {
         console.log('[MenuService] ⏳ Sync in progress, waiting for it to complete...');
         return await this.syncPromise;

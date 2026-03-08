@@ -1,18 +1,14 @@
 /**
- * cameraService.ts (v2.0 - FULLY INTEGRATED)
+ * cameraService.ts (v3.1 - No Alert.alert)
  * ---------------------------------------------------------------------------
- * Camera service with complete offline-first + PhotoUploadService + photoSyncStrategy.
- * 
- * INTEGRATED FEATURES:
- * ✅ Save photo locally first via PhotoUploadService (instant)
- * ✅ Queue for AI analysis via photoSyncStrategy
- * ✅ Return local placeholder scan immediately
- * ✅ Non-blocking sync with SyncManager
- * ✅ Proper error handling and user feedback
+ * Camera service with offline-first + PhotoUploadService + photoSyncStrategy.
+ *
+ * v3.1 Changes:
+ * ✅ REMOVED all Alert.alert() — service should not touch UI
+ * ✅ Returns status/error info, let component handle UI (toast, etc.)
  * ---------------------------------------------------------------------------
  */
 
-import { Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView } from 'expo-camera';
 import NetInfo from '@react-native-community/netinfo';
@@ -39,21 +35,13 @@ export class CameraService {
 
   /**
    * Request camera permission
+   * Returns boolean — caller handles UI if false
    */
   static async requestCameraPermission(): Promise<boolean> {
     try {
       const { Camera } = await import('expo-camera');
       const { status } = await Camera.requestCameraPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'Izin Diperlukan',
-          'Aplikasi membutuhkan akses kamera untuk mengambil foto makanan.'
-        );
-        return false;
-      }
-      
-      return true;
+      return status === 'granted';
     } catch (error) {
       console.error('Error requesting camera permission:', error);
       return false;
@@ -62,20 +50,12 @@ export class CameraService {
 
   /**
    * Request gallery/media library permission
+   * Returns boolean — caller handles UI if false
    */
   static async requestGalleryPermission(): Promise<boolean> {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'Izin Diperlukan',
-          'Aplikasi membutuhkan akses ke galeri untuk memilih foto.'
-        );
-        return false;
-      }
-      
-      return true;
+      return status === 'granted';
     } catch (error) {
       console.error('Error requesting gallery permission:', error);
       return false;
@@ -84,6 +64,7 @@ export class CameraService {
 
   /**
    * Take a photo using the camera
+   * Returns null on failure — caller handles UI
    */
   static async takePhoto(
     cameraRef: CameraView | null,
@@ -113,20 +94,20 @@ export class CameraService {
       return capturedPhoto;
     } catch (error) {
       console.error('[CameraService] Error taking photo:', error);
-      Alert.alert('Error', 'Gagal mengambil foto. Silakan coba lagi.');
       return null;
     }
   }
 
   /**
    * Pick an image from the gallery
+   * Returns null on failure/cancel — caller handles UI
    */
   static async pickImageFromGallery(
     options: PickImageOptions = {}
   ): Promise<CapturedPhoto | null> {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: options.allowsEditing ?? true,
         aspect: options.aspect ?? [3, 4],
         quality: options.quality ?? 0.8,
@@ -147,28 +128,23 @@ export class CameraService {
       return capturedPhoto;
     } catch (error) {
       console.error('[CameraService] Error picking image:', error);
-      Alert.alert('Error', 'Gagal memilih gambar. Silakan coba lagi.');
       return null;
     }
   }
 
   /**
-   * ✅ FULLY INTEGRATED: Analyze food from photo
-   * 
+   * Analyze food from photo (offline-first)
+   *
    * Flow:
-   * 1. Save photo locally via PhotoUploadService (instant, works offline)
+   * 1. Save photo locally (instant, works offline)
    * 2. Create local placeholder scan (instant feedback)
    * 3. Queue for background AI analysis via photoSyncStrategy
    * 4. Return local scan immediately
-   * 
-   * When online sync completes:
-   * - photoSyncStrategy.onSuccess() will:
-   *   a. Upload photo to Appwrite Storage
-   *   b. Call GPT-4 Vision via OpenRouter
-   *   c. Update local scan with AI results
+   *
+   * NO Alert.alert() — returns result object, caller shows toast/UI.
    */
   static async analyzeFood(
-    photoUri: string, 
+    photoUri: string,
     metadata?: {
       mealType?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
       notes?: string;
@@ -177,15 +153,13 @@ export class CameraService {
     success: boolean;
     scan?: NutritionScan;
     localPhotoUri?: string;
+    isOnline: boolean;
     message: string;
   }> {
     try {
       console.log('[CameraService] Starting food analysis flow...');
 
-      // ========================================================================
       // STEP 1: Get user ID
-      // ========================================================================
-      
       let userId: string;
       try {
         const authData = await authService.getCurrentUser();
@@ -195,53 +169,45 @@ export class CameraService {
         userId = 'unknown';
       }
 
-      // ========================================================================
-      // STEP 2: Save photo locally via PhotoUploadService (instant, offline-capable)
-      // ========================================================================
-      
+      // STEP 2: Save photo locally
       console.log('[CameraService] Saving photo locally...');
-      
+
       const saveResult = await PhotoUploadService.savePhotoLocally(photoUri);
-      
+
       if (!saveResult.success || !saveResult.localUri) {
         console.error('[CameraService] Failed to save photo locally:', saveResult.error);
         return {
           success: false,
+          isOnline: false,
           message: saveResult.error || 'Gagal menyimpan foto lokal',
         };
       }
 
       console.log('[CameraService] ✅ Photo saved locally:', saveResult.localUri);
 
-      // ========================================================================
-      // STEP 3: Create local placeholder scan (instant feedback)
-      // ========================================================================
-      
+      // STEP 3: Create local placeholder scan
       const localScanId = `photo_local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
+
       const localScan: NutritionScan = {
         id: localScanId,
         userId,
-        foodName: 'Analyzing...', // Will be updated after AI analysis
-        date: new Date().toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          year: 'numeric' 
+        foodName: 'Menganalisis...',
+        date: new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
         }),
-        time: new Date().toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
+        time: new Date().toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
         }),
-        calories: 0,  // Will be updated
-        protein: 0,   // Will be updated
-        carbs: 0,     // Will be updated
-        fats: 0,      // Will be updated
+        calories: 0,
+        protein: 0,
+        carbs: 0,
+        fats: 0,
       };
 
-      // ========================================================================
-      // STEP 4: Save placeholder scan to local storage
-      // ========================================================================
-      
+      // STEP 4: Save placeholder scan locally
       try {
         await MealOfflineAPI.saveCompletedScan(localScan);
         console.log('[CameraService] ✅ Placeholder scan saved locally');
@@ -249,21 +215,18 @@ export class CameraService {
         console.error('[CameraService] Failed to save local scan:', saveError);
         return {
           success: false,
+          isOnline: false,
           message: 'Gagal menyimpan data lokal',
         };
       }
 
-      // ========================================================================
-      // STEP 5: Queue for background AI analysis via photoSyncStrategy (non-blocking)
-      // ========================================================================
-      
+      // STEP 5: Queue for background AI analysis
       try {
         const syncManager = getSyncManager();
-        
-        // Queue photo for AI analysis
+
         await syncManager.sync('photo', {
           action: 'analyzePhoto',
-          photoUri: saveResult.localUri, // Use local photo URI
+          photoUri: saveResult.localUri,
           localScanId: localScanId,
           metadata: {
             userId,
@@ -271,75 +234,72 @@ export class CameraService {
             notes: metadata?.notes,
           },
         });
-        
-        console.log('[CameraService] 📋 Photo queued for AI analysis via photoSyncStrategy');
+
+        console.log('[CameraService] 📋 Photo queued for AI analysis');
       } catch (syncError) {
-        // Non-blocking error - local scan and photo already saved
         console.warn('[CameraService] Failed to queue for sync, will retry later:', syncError);
       }
 
-      // ========================================================================
-      // STEP 6: Check network and inform user
-      // ========================================================================
-      
+      // STEP 6: Return result — caller decides how to show UI
       const online = await this.isOnline();
-      
+
       const message = online
         ? 'Foto sedang dianalisis. Hasil akan muncul sebentar lagi.'
         : 'Foto tersimpan. Akan dianalisis saat terhubung ke internet.';
 
-      Alert.alert(
-        'Sedang Diproses',
-        message,
-        [{ text: 'OK', style: 'default' }]
-      );
-
-      // ========================================================================
-      // STEP 7: Return local scan immediately (instant success)
-      // ========================================================================
-      
       return {
         success: true,
         scan: localScan,
         localPhotoUri: saveResult.localUri,
+        isOnline: online,
         message,
       };
-
     } catch (error) {
       console.error('[CameraService] Error in analyzeFood:', error);
-      
+
       return {
         success: false,
+        isOnline: false,
         message: error instanceof Error ? error.message : 'Gagal menganalisis foto',
       };
     }
   }
 
   /**
-   * ✅ Get analysis status
-   * Check if photo analysis is complete or still pending
+   * Get analysis status
+   * Check if photo analysis is complete, pending, or not-food
    */
   static async getAnalysisStatus(scanId: string): Promise<{
     isComplete: boolean;
     isPending: boolean;
+    isNotFood: boolean;
     scan?: NutritionScan;
   }> {
     try {
       const scan = await MealOfflineAPI.getLocalScanById(scanId);
-      
+
       if (!scan) {
         return {
           isComplete: false,
           isPending: false,
+          isNotFood: false,
         };
       }
 
+      // Check if marked as not-food
+      const isNotFood = scan.foodName?.startsWith('Bukan Makanan') || false;
+
       // Check if analysis is complete (has actual nutrition data)
-      const isComplete = scan.calories > 0 && scan.foodName !== 'Analyzing...';
-      
+      const isComplete =
+        !isNotFood &&
+        scan.calories > 0 &&
+        scan.foodName !== 'Menganalisis...' &&
+        scan.foodName !== 'Analisis Gagal - Akan Dicoba Ulang';
+
       return {
         isComplete,
-        isPending: !isComplete,
+        isPending: !isComplete && !isNotFood,
+        isNotFood,
         scan: scan as NutritionScan,
       };
     } catch (error) {
@@ -347,50 +307,36 @@ export class CameraService {
       return {
         isComplete: false,
         isPending: false,
+        isNotFood: false,
       };
     }
   }
 
   /**
-   * ✅ Retry failed photo analysis
+   * Retry failed photo analysis
+   * Returns boolean — caller handles UI
    */
   static async retryPhotoAnalysis(scanId: string): Promise<boolean> {
     try {
       const syncManager = getSyncManager();
-      
-      // Get local scan
+
       const scan = await MealOfflineAPI.getLocalScanById(scanId);
       if (!scan) {
         throw new Error('Scan not found');
       }
 
-      // Retry sync for this specific scan
       await syncManager.retryFailed(scanId);
-      
+
       console.log('[CameraService] ✅ Photo analysis retry queued');
-      
-      Alert.alert(
-        'Retry Dijadwalkan',
-        'Analisis foto akan dicoba ulang.',
-        [{ text: 'OK', style: 'default' }]
-      );
-      
       return true;
     } catch (error) {
       console.error('[CameraService] Error retrying photo analysis:', error);
-      
-      Alert.alert(
-        'Error',
-        'Gagal menjadwalkan retry. Silakan coba lagi.',
-        [{ text: 'OK', style: 'cancel' }]
-      );
-      
       return false;
     }
   }
 
   /**
-   * ✅ Get pending photo analyses count
+   * Get pending photo analyses count
    */
   static async getPendingAnalysesCount(): Promise<number> {
     try {
@@ -403,7 +349,7 @@ export class CameraService {
   }
 
   /**
-   * ✅ Clean up old local photos (optional maintenance)
+   * Clean up old local photos
    */
   static async cleanupOldPhotos(daysOld: number = 7): Promise<{
     success: boolean;
@@ -411,7 +357,7 @@ export class CameraService {
   }> {
     try {
       const deletedCount = await PhotoUploadService.cleanupOldLocalPhotos(daysOld);
-      
+
       return {
         success: true,
         deletedCount,
@@ -426,7 +372,7 @@ export class CameraService {
   }
 
   /**
-   * ✅ Get local photos storage size
+   * Get local photos storage size
    */
   static async getLocalPhotosSize(): Promise<number> {
     try {

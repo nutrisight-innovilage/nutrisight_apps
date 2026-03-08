@@ -1,13 +1,17 @@
 /**
- * openRouterConfig.ts
+ * openRouterConfig.ts (v3.0 - Single Source of Truth for Prompts)
  * ---------------------------------------------------------------------------
  * Configuration for OpenRouter API integration.
- * 
- * Used for:
- * • Photo analysis (food identification from images)
- * • Weekly nutrition summary (AI-generated one-liner)
- * 
- * Model: OpenAI GPT-4.1 via OpenRouter
+ *
+ * v3.0 Changes:
+ * ✅ Centralized ALL prompts here (no more duplicates in other files)
+ * ✅ Weekly summary: educational/analytical tone (not motivational)
+ * ✅ Photo analysis: non-food detection built into prompt
+ * ✅ Photo detection prompt uses fixed Indonesian food categories
+ *
+ * Used by:
+ * • openRouterService.ts (the ONLY service that calls OpenRouter)
+ * • photoSyncStrategy.ts (calls openRouterService, NOT OpenRouter directly)
  * ---------------------------------------------------------------------------
  */
 
@@ -15,13 +19,8 @@
 // Environment / Constants
 // ---------------------------------------------------------------------------
 
-/**
- * ⚠️ IMPORTANT: Replace with your actual OpenRouter API key.
- * In production, use environment variables or a secure vault.
- * 
- * Get your key at: https://openrouter.ai/keys
- */
-const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || 'YOUR_OPENROUTER_API_KEY';
+const OPENROUTER_API_KEY =
+  process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || 'YOUR_OPENROUTER_API_KEY';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -49,15 +48,15 @@ export interface OpenRouterRequestConfig {
 
 export const PHOTO_ANALYSIS_CONFIG: OpenRouterRequestConfig = {
   model: OPENROUTER_MODELS.PHOTO_ANALYSIS,
-  temperature: 0.3,
-  max_tokens: 1024,
+  temperature: 0.1,
+  max_tokens: 500,
   top_p: 0.9,
 };
 
 export const WEEKLY_SUMMARY_CONFIG: OpenRouterRequestConfig = {
   model: OPENROUTER_MODELS.WEEKLY_SUMMARY,
-  temperature: 0.7,
-  max_tokens: 150,
+  temperature: 0.5,
+  max_tokens: 300,
   top_p: 0.9,
 };
 
@@ -66,73 +65,118 @@ export const WEEKLY_SUMMARY_CONFIG: OpenRouterRequestConfig = {
 // ---------------------------------------------------------------------------
 
 export const PROMPTS = {
+  // =========================================================================
+  // PHOTO ANALYSIS — Fixed Indonesian Food Categories + Non-Food Detection
+  // =========================================================================
+
   /**
-   * System prompt for food photo analysis.
-   * The AI identifies foods, estimates portions, and returns structured JSON.
+   * Food detection prompt with fixed categories.
+   * AI detects category + portion grams ONLY — nutrition calculated locally.
+   *
+   * Also handles NON-FOOD images by returning isFood: false.
    */
-  PHOTO_ANALYSIS_SYSTEM: `You are a professional nutritionist AI assistant specializing in Indonesian food identification and nutrition analysis.
+  FOOD_DETECTION: `You are a food detection AI for Indonesian meals. Analyze the provided image.
 
-When given a food photo, you must:
-1. Identify all visible food items (use Indonesian food names when applicable)
-2. Estimate portion sizes in grams
-3. Calculate approximate nutrition per item
-4. Return a structured JSON response
-
-IMPORTANT: Always respond in valid JSON format with this exact structure:
+STEP 1 — CHECK IF THIS IS FOOD:
+First, determine if the image contains food. If the image does NOT contain food (e.g., person, object, scenery, text, animal, selfie, document, etc.), respond ONLY with:
 {
-  "success": true,
+  "isFood": false,
+  "reason": "<brief description of what the image shows instead>"
+}
+Do NOT proceed to Step 2 if the image is not food.
+
+STEP 2 — IF FOOD IS DETECTED:
+Classify each visible food item into one of these EXACT categories:
+
+ALLOWED CATEGORIES (use ONLY these values):
+- "ayam" → Chicken (any preparation: goreng, bakar, rebus, etc.)
+- "ikan" → Fish (any type: goreng, bakar, pindang, etc.)
+- "nasi" → Rice (putih, goreng, uduk, etc.)
+- "tempe" → Tempeh (goreng, bacem, mendoan, etc.)
+- "telur" → Egg (goreng, rebus, dadar, etc.)
+- "tahu" → Tofu (goreng, bacem, etc.)
+- "sambal" → Chili sauce/paste (any type)
+- "sayur" → Vegetables (any: kangkung, bayam, lalapan, capcay, etc.)
+- "kuah" → Broth/soup liquid (soto, sup, rawon broth, etc.)
+- "other" → Anything else not in above categories
+
+IMPORTANT RULES:
+1. ONLY use categories from the list above. No other values allowed.
+2. portionGrams MUST be in GRAMS only (not ml, not pieces, not servings).
+3. For "kuah" (broth), estimate the liquid volume in grams (1ml ≈ 1g).
+4. If same category appears multiple times (e.g., 2 types of sayur), combine into one entry.
+5. Respond with VALID JSON only. No text before or after.
+
+OUTPUT FORMAT FOR FOOD:
+{
+  "isFood": true,
   "foods": [
     {
-      "name": "Food name (Indonesian)",
-      "estimatedGrams": 150,
-      "confidence": 0.85,
-      "nutrition": {
-        "calories": 250,
-        "protein": 15,
-        "carbs": 30,
-        "fats": 8
-      }
+      "category": "<one of the allowed categories>",
+      "portionGrams": <number in grams>,
+      "confidenceCategory": <0.00 to 1.00>,
+      "confidencePortion": <0.00 to 1.00>
     }
-  ],
-  "totalNutrition": {
-    "calories": 500,
-    "protein": 30,
-    "carbs": 60,
-    "fats": 16
-  },
-  "mealDescription": "Brief description of the meal in Indonesian"
+  ]
 }
 
-If you cannot identify the food clearly, set confidence below 0.5 and provide your best estimate.
-If the image is not food, return: { "success": false, "error": "Gambar bukan makanan" }`,
+EXAMPLE — Nasi padang plate:
+{
+  "isFood": true,
+  "foods": [
+    { "category": "nasi", "portionGrams": 200, "confidenceCategory": 0.95, "confidencePortion": 0.85 },
+    { "category": "ayam", "portionGrams": 120, "confidenceCategory": 0.92, "confidencePortion": 0.80 },
+    { "category": "sayur", "portionGrams": 80, "confidenceCategory": 0.88, "confidencePortion": 0.75 },
+    { "category": "sambal", "portionGrams": 25, "confidenceCategory": 0.90, "confidencePortion": 0.70 }
+  ]
+}
 
-  /**
-   * User prompt template for photo analysis.
-   */
-  PHOTO_ANALYSIS_USER: 'Analisis foto makanan ini. Identifikasi semua makanan yang terlihat, perkirakan porsi dan nutrisinya.',
+EXAMPLE — Not food:
+{
+  "isFood": false,
+  "reason": "Image shows a cat sitting on a table"
+}
+
+Now analyze the provided image:`,
+
+  // =========================================================================
+  // WEEKLY SUMMARY — Educational / Analytical / Warning
+  // =========================================================================
 
   /**
    * System prompt for weekly nutrition summary.
-   * Generates a concise, motivational one-liner in Indonesian.
+   * Tone: educational, analytical, honest. NOT motivational.
+   * Purpose: teach, reflect, warn about nutritional status.
    */
-  WEEKLY_SUMMARY_SYSTEM: `You are a friendly Indonesian nutritionist. Given weekly nutrition data, generate exactly ONE short motivational sentence in Indonesian (Bahasa Indonesia) summarizing the week's eating habits.
+  WEEKLY_SUMMARY_SYSTEM: `Kamu adalah ahli gizi Indonesia yang memberikan evaluasi jujur dan edukatif tentang pola makan mingguan seseorang.
 
-Rules:
-- Maximum 1 sentence, under 80 characters
-- Use casual, friendly Indonesian
-- Include a relevant emoji
-- Be encouraging but honest
-- Focus on the most notable aspect (good balance, high calories, low protein, etc.)
+TUJUAN:
+- Mencerminkan kondisi asupan gizi secara faktual (baik, buruk, berlebihan, kekurangan)
+- Mengajarkan tentang keseimbangan nutrisi
+- Memperingatkan jika ada masalah (kalori berlebih, protein kurang, dll.)
+- BUKAN untuk memotivasi atau menyemangati — fokus pada fakta dan edukasi
 
-Examples:
-- "Minggu ini protein kamu oke banget! 💪"
-- "Kalori agak tinggi, yuk kurangi gorengan 🍳"
-- "Pola makan seimbang, pertahankan! ⭐"
-- "Kurang sayur minggu ini, tambah ya 🥬"`,
+PANDUAN EVALUASI:
+- Kebutuhan kalori harian rata-rata: 1800-2200 kkal (tergantung aktivitas)
+- Protein harian: 50-65g (minimal 10-15% dari total kalori)
+- Karbohidrat harian: 250-325g (45-65% dari total kalori)
+- Lemak harian: 44-78g (20-35% dari total kalori)
+- Rasio seimbang per porsi: protein ≥15%, karbohidrat 45-65%, lemak ≤35%
+
+FORMAT JAWABAN:
+Berikan 2-3 kalimat singkat dalam Bahasa Indonesia yang mencakup:
+1. Status keseluruhan (baik/kurang/berlebihan)
+2. Masalah spesifik yang perlu diperhatikan (jika ada)
+3. Saran konkret perbaikan (jika ada masalah)
+
+CONTOH:
+- "Asupan protein minggu ini kurang dari kebutuhan harian (hanya 35g/hari vs rekomendasi 50-65g). Karbohidrat berlebihan 40% dari batas atas. Kurangi nasi/gorengan dan tambah lauk protein seperti telur, tempe, atau ikan."
+- "Pola makan minggu ini cukup seimbang. Protein dan karbohidrat dalam rentang normal. Lemak sedikit tinggi — perhatikan porsi gorengan dan santan."
+- "Total kalori sangat rendah (rata-rata 900 kkal/hari) — ini di bawah kebutuhan minimum. Risiko kekurangan energi dan nutrisi. Pastikan makan 3 kali sehari dengan porsi cukup."
+- "Hanya 2 dari 14 porsi yang seimbang. Pola makan didominasi karbohidrat tinggi dengan protein minim. Tambahkan sumber protein di setiap makan."`,
 
   /**
    * User prompt template for weekly summary.
-   * {data} will be replaced with actual nutrition data.
    */
   WEEKLY_SUMMARY_USER: (data: {
     mealsCount: number;
@@ -142,15 +186,24 @@ Examples:
     totalCarbs: number;
     totalFats: number;
     balancedMealsCount: number;
-  }) => `Data nutrisi minggu ini:
-- Total makanan: ${data.mealsCount} porsi
-- Total kalori: ${data.totalCalories} kal (rata-rata ${data.avgCalories}/porsi)
-- Protein: ${data.totalProtein}g
-- Karbohidrat: ${data.totalCarbs}g  
-- Lemak: ${data.totalFats}g
-- Makanan seimbang: ${data.balancedMealsCount}/${data.mealsCount}
+    daysTracked?: number;
+  }) => {
+    const days = data.daysTracked || 7;
+    const dailyCalories = Math.round(data.totalCalories / days);
+    const dailyProtein = Math.round(data.totalProtein / days);
+    const dailyCarbs = Math.round(data.totalCarbs / days);
+    const dailyFats = Math.round(data.totalFats / days);
 
-Berikan 1 kalimat ringkasan motivasi dalam Bahasa Indonesia.`,
+    return `Data nutrisi minggu ini (${days} hari):
+- Total porsi tercatat: ${data.mealsCount}
+- Total kalori: ${data.totalCalories} kkal (rata-rata ${dailyCalories} kkal/hari, ${data.avgCalories} kkal/porsi)
+- Protein: ${data.totalProtein}g total (${dailyProtein}g/hari)
+- Karbohidrat: ${data.totalCarbs}g total (${dailyCarbs}g/hari)
+- Lemak: ${data.totalFats}g total (${dailyFats}g/hari)
+- Porsi seimbang: ${data.balancedMealsCount} dari ${data.mealsCount}
+
+Berikan evaluasi jujur tentang kondisi asupan gizi ini. Jangan memotivasi, tapi ajarkan dan peringatkan jika ada masalah.`;
+  },
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -159,7 +212,7 @@ Berikan 1 kalimat ringkasan motivasi dalam Bahasa Indonesia.`,
 
 export function getOpenRouterHeaders(): Record<string, string> {
   return {
-    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
     'Content-Type': 'application/json',
     'HTTP-Referer': 'https://nutrisight.app',
     'X-Title': 'NutriSight',

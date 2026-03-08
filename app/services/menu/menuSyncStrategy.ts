@@ -34,6 +34,7 @@ import {
   extractFoodItems,
   isMenuSyncResult,
 } from '@/app/types/food';
+import { MealOfflineAPI } from '../meal/mealOfflineAPI';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -173,6 +174,14 @@ export class MenuSyncStrategy implements SyncStrategy {
         menuOfflineAPI.saveMenuDetails(detailsMap),
         menuOfflineAPI.updateLastSync(),
       ]);
+      // STEP 7: Build food catalog for NutritionCalculator
+      const catalogDocs = updatedItems.map(item => ({
+        $id: item.id,
+        foodName: item.foodName,
+        category: item.category,
+      }));
+      await MealOfflineAPI.buildAndSaveCatalog(catalogDocs);
+
 
       const stats: SyncStats = {
         totalItems: updatedItems.length,

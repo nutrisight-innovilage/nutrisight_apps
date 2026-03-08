@@ -1,13 +1,18 @@
 /**
- * openRouterService.ts
+ * openRouterService.ts (v3.0 - Single OpenRouter Gateway)
  * ---------------------------------------------------------------------------
- * Service for OpenRouter AI interactions.
- * 
- * Features:
- * • ✅ Photo analysis (food identification from base64 images)
- * • ✅ Weekly nutrition summary generation
- * • ✅ Retry logic with exponential backoff
- * • ✅ Offline-safe (returns null when not configured / no network)
+ * THE ONLY service that calls OpenRouter API directly.
+ *
+ * v3.0 Changes:
+ * ✅ Single gateway — all OpenRouter calls go through this service
+ * ✅ detectFoodCategories() — used by photoSyncStrategy (replaces direct API call)
+ * ✅ Non-food detection — returns isFood: false when image isn't food
+ * ✅ Weekly summary — educational/analytical tone (from updated prompts)
+ * ✅ All prompts imported from openRouterConfig.ts (single source of truth)
+ *
+ * Consumers:
+ * • photoSyncStrategy.ts → calls detectFoodCategories()
+ * • weeklyInsight logic   → calls generateWeeklySummary()
  * ---------------------------------------------------------------------------
  */
 
@@ -20,36 +25,32 @@ import openRouterConfig, {
   WEEKLY_SUMMARY_CONFIG,
   PROMPTS,
 } from '@/app/config/openRouterConfig';
-import { NutritionScan, WeeklyInsight } from '@/app/types/meal';
+import { WeeklyInsight } from '@/app/types/meal';
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — Food Detection (used by photoSyncStrategy)
 // ---------------------------------------------------------------------------
 
-export interface PhotoAnalysisResult {
-  success: boolean;
-  foods: DetectedFood[];
-  totalNutrition: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fats: number;
-  };
-  mealDescription: string;
-  error?: string;
+/**
+ * AI detection result: either food detected or not-food.
+ */
+export interface FoodDetectionResult {
+  /** Whether the image contains food */
+  isFood: boolean;
+  /** If isFood=false, reason why (e.g., "Image shows a cat") */
+  notFoodReason?: string;
+  /** Detected food items (only present when isFood=true) */
+  foods: Array<{
+    category: string;
+    portionGrams: number;
+    confidenceCategory: number;
+    confidencePortion: number;
+  }>;
 }
 
-export interface DetectedFood {
-  name: string;
-  estimatedGrams: number;
-  confidence: number;
-  nutrition: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fats: number;
-  };
-}
+// ---------------------------------------------------------------------------
+// Types — Weekly Summary
+// ---------------------------------------------------------------------------
 
 export interface WeeklySummaryResult {
   success: boolean;
@@ -95,12 +96,28 @@ function getMimeType(uri: string): string {
     case 'png': return 'image/png';
     case 'gif': return 'image/gif';
     case 'webp': return 'image/webp';
+    case 'heic': return 'image/heic';
     default: return 'image/jpeg';
   }
 }
 
 /**
- * Make API call to OpenRouter with retry
+ * Extract JSON from AI response (handles markdown code blocks)
+ */
+function extractJSON(content: string): string {
+  // Try markdown code block first
+  const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) return jsonMatch[1];
+
+  // Try raw JSON object
+  const objMatch = content.match(/\{[\s\S]*\}/);
+  if (objMatch) return objMatch[0];
+
+  return content;
+}
+
+/**
+ * Core API call with retry + timeout
  */
 async function callOpenRouter(
   messages: Array<{ role: string; content: any }>,
@@ -124,6 +141,7 @@ async function callOpenRouter(
         temperature: config.temperature,
         max_tokens: config.max_tokens,
         top_p: config.top_p,
+        response_format: { type: 'json_object' },
       }),
       signal: controller.signal,
     });
@@ -136,8 +154,7 @@ async function callOpenRouter(
       throw new Error(`API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error: any) {
     if (error.name === 'AbortError') {
       throw new Error('Request timed out');
@@ -160,47 +177,51 @@ async function callOpenRouter(
 class OpenRouterService {
 
   // =========================================================================
-  // PHOTO ANALYSIS
+  // FOOD CATEGORY DETECTION (used by photoSyncStrategy)
   // =========================================================================
 
   /**
-   * Analyze a food photo using GPT-4.1 vision.
-   * 
-   * @param photoUri - Local file URI of the photo
-   * @returns PhotoAnalysisResult with detected foods and nutrition
+   * Detect food categories + portions from a photo.
+   * Also detects if the image is NOT food.
+   *
+   * This is the PRIMARY method used by photoSyncStrategy.
+   *
+   * @param imageSource - Either a remote URL (https://) or a local file URI (file://)
+   * @returns FoodDetectionResult with isFood flag and detected items
    */
-  async analyzePhoto(photoUri: string): Promise<PhotoAnalysisResult> {
+  async detectFoodCategories(imageSource: string): Promise<FoodDetectionResult> {
     try {
-      console.log('[OpenRouterService] Starting photo analysis...');
+      console.log('[OpenRouterService] Starting food category detection...');
 
       if (!isOpenRouterConfigured()) {
-        console.warn('[OpenRouterService] API not configured, using fallback');
-        return this.getFallbackPhotoAnalysis();
+        throw new Error('OpenRouter API key not configured');
       }
 
-      // Convert to base64
-      const base64Image = await imageUriToBase64(photoUri);
-      const mimeType = getMimeType(photoUri);
+      // Build image content — base64 for local files, URL for remote
+      let imageContent: { type: string; image_url: { url: string } };
 
-      // Build messages with vision
+      if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
+        // Remote URL — pass directly
+        imageContent = {
+          type: 'image_url',
+          image_url: { url: imageSource },
+        };
+      } else {
+        // Local file — convert to base64
+        const base64Image = await imageUriToBase64(imageSource);
+        const mimeType = getMimeType(imageSource);
+        imageContent = {
+          type: 'image_url',
+          image_url: { url: `data:${mimeType};base64,${base64Image}` },
+        };
+      }
+
       const messages = [
-        {
-          role: 'system',
-          content: PROMPTS.PHOTO_ANALYSIS_SYSTEM,
-        },
         {
           role: 'user',
           content: [
-            {
-              type: 'text',
-              text: PROMPTS.PHOTO_ANALYSIS_USER,
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:${mimeType};base64,${base64Image}`,
-              },
-            },
+            { type: 'text', text: PROMPTS.FOOD_DETECTION },
+            imageContent,
           ],
         },
       ];
@@ -212,96 +233,44 @@ class OpenRouterService {
         throw new Error('Empty response from AI');
       }
 
-      // Parse JSON response
-      const parsed = this.parsePhotoAnalysisResponse(content);
-      console.log('[OpenRouterService] ✅ Photo analysis complete');
-      return parsed;
-    } catch (error) {
-      console.error('[OpenRouterService] Photo analysis failed:', error);
-      return {
-        success: false,
-        foods: [],
-        totalNutrition: { calories: 0, protein: 0, carbs: 0, fats: 0 },
-        mealDescription: '',
-        error: error instanceof Error ? error.message : 'Analisis gagal',
-      };
-    }
-  }
+      console.log('[OpenRouterService] Raw AI response:', content);
 
-  /**
-   * Parse the AI response into structured PhotoAnalysisResult
-   */
-  private parsePhotoAnalysisResponse(content: string): PhotoAnalysisResult {
-    try {
-      // Try to extract JSON from response (AI sometimes wraps in markdown)
-      let jsonStr = content;
-      const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[1];
-      } else {
-        // Try to find JSON object directly
-        const objMatch = content.match(/\{[\s\S]*\}/);
-        if (objMatch) {
-          jsonStr = objMatch[0];
-        }
-      }
+      // Parse response
+      const jsonContent = extractJSON(content);
+      const parsed = JSON.parse(jsonContent);
 
-      const parsed = JSON.parse(jsonStr);
-
-      if (!parsed.success && parsed.error) {
+      // ── NON-FOOD CHECK ──────────────────────────────────────────────
+      if (parsed.isFood === false) {
+        console.log('[OpenRouterService] ⚠️ Not food:', parsed.reason);
         return {
-          success: false,
+          isFood: false,
+          notFoodReason: parsed.reason || 'Gambar bukan makanan',
           foods: [],
-          totalNutrition: { calories: 0, protein: 0, carbs: 0, fats: 0 },
-          mealDescription: '',
-          error: parsed.error,
         };
       }
 
+      // ── FOOD DETECTED — validate items ──────────────────────────────
+      if (!parsed.foods || !Array.isArray(parsed.foods)) {
+        throw new Error('Invalid AI response: missing foods array');
+      }
+
+      const foods = parsed.foods.map((food: any) => ({
+        category: food.category || 'other',
+        portionGrams: typeof food.portionGrams === 'number' ? food.portionGrams : 0,
+        confidenceCategory: food.confidenceCategory ?? 0.5,
+        confidencePortion: food.confidencePortion ?? 0.5,
+      }));
+
+      console.log('[OpenRouterService] ✅ Food detection complete:', foods.length, 'items');
+
       return {
-        success: true,
-        foods: (parsed.foods || []).map((f: any) => ({
-          name: f.name || 'Unknown',
-          estimatedGrams: f.estimatedGrams || 0,
-          confidence: f.confidence || 0.5,
-          nutrition: {
-            calories: Math.round(f.nutrition?.calories || 0),
-            protein: Math.round(f.nutrition?.protein || 0),
-            carbs: Math.round(f.nutrition?.carbs || 0),
-            fats: Math.round(f.nutrition?.fats || 0),
-          },
-        })),
-        totalNutrition: {
-          calories: Math.round(parsed.totalNutrition?.calories || 0),
-          protein: Math.round(parsed.totalNutrition?.protein || 0),
-          carbs: Math.round(parsed.totalNutrition?.carbs || 0),
-          fats: Math.round(parsed.totalNutrition?.fats || 0),
-        },
-        mealDescription: parsed.mealDescription || '',
+        isFood: true,
+        foods,
       };
     } catch (error) {
-      console.error('[OpenRouterService] Failed to parse photo analysis:', error);
-      return {
-        success: false,
-        foods: [],
-        totalNutrition: { calories: 0, protein: 0, carbs: 0, fats: 0 },
-        mealDescription: '',
-        error: 'Gagal memparse hasil analisis',
-      };
+      console.error('[OpenRouterService] Food detection failed:', error);
+      throw error instanceof Error ? error : new Error('Food detection failed');
     }
-  }
-
-  /**
-   * Fallback when API is not configured
-   */
-  private getFallbackPhotoAnalysis(): PhotoAnalysisResult {
-    return {
-      success: false,
-      foods: [],
-      totalNutrition: { calories: 0, protein: 0, carbs: 0, fats: 0 },
-      mealDescription: '',
-      error: 'OpenRouter API belum dikonfigurasi. Silakan tambahkan API key di config.',
-    };
   }
 
   // =========================================================================
@@ -309,10 +278,10 @@ class OpenRouterService {
   // =========================================================================
 
   /**
-   * Generate a one-sentence AI summary of weekly nutrition data.
-   * 
+   * Generate an educational/analytical summary of weekly nutrition data.
+   *
    * @param insight - WeeklyInsight data
-   * @returns One-liner summary in Indonesian
+   * @returns 2-3 sentence evaluation in Indonesian
    */
   async generateWeeklySummary(insight: WeeklyInsight): Promise<WeeklySummaryResult> {
     try {
@@ -326,7 +295,7 @@ class OpenRouterService {
       if (insight.mealsCount === 0) {
         return {
           success: true,
-          summary: 'Belum ada data minggu ini. Yuk mulai catat makananmu! 📝',
+          summary: 'Belum ada data makanan yang tercatat minggu ini. Tanpa data, kondisi gizi tidak bisa dievaluasi.',
         };
       }
 
@@ -338,6 +307,7 @@ class OpenRouterService {
         totalCarbs: insight.totalCarbs,
         totalFats: insight.totalFats,
         balancedMealsCount: insight.balancedMealsCount ?? 0,
+        daysTracked: (insight as any).daysTracked,
       });
 
       const messages = [
@@ -345,18 +315,17 @@ class OpenRouterService {
         { role: 'user', content: userPrompt },
       ];
 
-      const response = await callOpenRouter(messages, WEEKLY_SUMMARY_CONFIG);
+      // Weekly summary doesn't need json_object format — override
+      const config = { ...WEEKLY_SUMMARY_CONFIG };
+      const response = await this.callOpenRouterText(messages, config);
       const content = response.choices?.[0]?.message?.content?.trim();
 
       if (!content) {
         throw new Error('Empty response');
       }
 
-      // Ensure it's a single sentence (trim to first sentence if needed)
-      const summary = content.split('\n')[0].trim();
-
       console.log('[OpenRouterService] ✅ Weekly summary generated');
-      return { success: true, summary };
+      return { success: true, summary: content };
     } catch (error) {
       console.error('[OpenRouterService] Weekly summary failed:', error);
       return this.getFallbackWeeklySummary(insight);
@@ -364,28 +333,109 @@ class OpenRouterService {
   }
 
   /**
-   * Fallback summary when API is unavailable
+   * Fallback summary when API is unavailable — educational tone
    */
   private getFallbackWeeklySummary(insight: WeeklyInsight): WeeklySummaryResult {
-    const balancedPct = insight.mealsCount > 0
-      ? Math.round(((insight.balancedMealsCount ?? 0) / insight.mealsCount) * 100)
-      : 0;
+    if (insight.mealsCount === 0) {
+      return {
+        success: true,
+        summary: 'Belum ada data makanan yang tercatat minggu ini.',
+      };
+    }
+
+    const days = (insight as any).daysTracked || 7;
+    const dailyCalories = Math.round(insight.totalCalories / days);
+    const dailyProtein = Math.round(insight.totalProtein / days);
+    const balancedPct = Math.round(
+      ((insight.balancedMealsCount ?? 0) / insight.mealsCount) * 100
+    );
+
+    const issues: string[] = [];
+
+    // Check daily calories
+    if (dailyCalories < 1200) {
+      issues.push(`Kalori harian sangat rendah (${dailyCalories} kkal/hari) — di bawah kebutuhan minimum`);
+    } else if (dailyCalories > 2500) {
+      issues.push(`Kalori harian berlebihan (${dailyCalories} kkal/hari) — di atas batas rekomendasi`);
+    }
+
+    // Check protein
+    if (dailyProtein < 40) {
+      issues.push(`Protein kurang (${dailyProtein}g/hari vs rekomendasi 50-65g)`);
+    }
+
+    // Check balance
+    if (balancedPct < 30) {
+      issues.push(`Hanya ${balancedPct}% porsi yang seimbang — pola makan perlu diperbaiki`);
+    }
 
     let summary: string;
-
-    if (insight.mealsCount === 0) {
-      summary = 'Belum ada data minggu ini 📝';
-    } else if (balancedPct >= 70) {
-      summary = `Luar biasa! ${balancedPct}% makanan seimbang minggu ini ⭐`;
-    } else if (balancedPct >= 40) {
-      summary = `${balancedPct}% makanan seimbang, terus tingkatkan! 💪`;
-    } else if (insight.avgCalories > 600) {
-      summary = 'Kalori agak tinggi minggu ini, yuk dijaga 🍽️';
+    if (issues.length === 0) {
+      summary = `Asupan gizi minggu ini dalam rentang normal (${dailyCalories} kkal/hari, protein ${dailyProtein}g/hari). Pertahankan pola makan ini.`;
     } else {
-      summary = `${insight.mealsCount} makanan tercatat, ayo perbaiki keseimbangan! 🎯`;
+      summary = issues.join('. ') + '.';
     }
 
     return { success: true, summary };
+  }
+
+  // =========================================================================
+  // INTERNAL: Text-only call (no json_object format)
+  // =========================================================================
+
+  /**
+   * Call OpenRouter for text responses (e.g., weekly summary).
+   * Unlike callOpenRouter(), this does NOT set response_format: json_object.
+   */
+  private async callOpenRouterText(
+    messages: Array<{ role: string; content: any }>,
+    config: { model: string; temperature: number; max_tokens: number; top_p: number },
+    retries: number = 0
+  ): Promise<any> {
+    if (!isOpenRouterConfigured()) {
+      throw new Error('OpenRouter API key not configured');
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const response = await fetch(getOpenRouterChatURL(), {
+        method: 'POST',
+        headers: getOpenRouterHeaders(),
+        body: JSON.stringify({
+          model: config.model,
+          messages,
+          temperature: config.temperature,
+          max_tokens: config.max_tokens,
+          top_p: config.top_p,
+          // NO response_format here — free text
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`[OpenRouterService] API error ${response.status}:`, errorBody);
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error('Request timed out');
+      }
+
+      if (retries < MAX_RETRIES) {
+        console.warn(`[OpenRouterService] Retry ${retries + 1}/${MAX_RETRIES}...`);
+        await delay(RETRY_DELAY_MS * Math.pow(2, retries));
+        return this.callOpenRouterText(messages, config, retries + 1);
+      }
+
+      throw error;
+    }
   }
 
   // =========================================================================

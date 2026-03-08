@@ -1,12 +1,13 @@
 /**
- * mealService.ts (v2.1 - WeeklyInsight balancedMealsCount + No Mock Data)
+ * mealService.ts (v2.2 - WeeklyInsight DB Save + Scheduled Sync)
  * ---------------------------------------------------------------------------
  * TRUE OFFLINE-FIRST - STRICTLY following meal.ts types.
  * 
- * v2.1 Changes:
- * • ✅ Weekly insights includes balancedMealsCount
- * • ✅ Removed all mock/hardcoded menu item references
- * • ✅ All food data comes from Appwrite via FoodCatalog
+ * v2.2 Changes:
+ * • ✅ Weekly insights saved to Appwrite via SyncManager
+ * • ✅ Scheduled weekly insight save (every Sunday / end of week)
+ * • ✅ saveWeeklyInsight() queues data for sync
+ * • ✅ Weekly insight also saved on each meal submission
  * ---------------------------------------------------------------------------
  */
 
@@ -41,7 +42,34 @@ interface MealServiceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Meal Service Class (v2.1)
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Get start of current week (Monday 00:00:00)
+ */
+function getWeekStart(date: Date = new Date()): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+  d.setDate(diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Get end of current week (Sunday 23:59:59)
+ */
+function getWeekEnd(date: Date = new Date()): Date {
+  const start = getWeekStart(date);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return end;
+}
+
+// ---------------------------------------------------------------------------
+// Meal Service Class (v2.2)
 // ---------------------------------------------------------------------------
 
 class MealService {
@@ -52,6 +80,7 @@ class MealService {
   };
 
   private isOnline: boolean = false;
+  private weeklyInsightTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.setupNetworkListener();
@@ -75,6 +104,9 @@ class MealService {
     try {
       await MealOfflineAPI.initializeOfflineAPI();
       console.log('[MealService] ✅ Service initialized');
+
+      // ✅ v2.2: Start weekly insight scheduler
+      this.startWeeklyInsightScheduler();
     } catch (error) {
       console.error('[MealService] Initialization failed:', error);
     }
@@ -92,6 +124,155 @@ class MealService {
     const state = await NetInfo.fetch();
     this.isOnline = state.isConnected ?? false;
     return this.isOnline;
+  }
+
+  // ===========================================================================
+  // ✅ v2.2: WEEKLY INSIGHT SCHEDULER
+  // ===========================================================================
+
+  /**
+   * Start periodic check to save weekly insight.
+   * Checks every 6 hours if it's time to save (end of week).
+   */
+  private startWeeklyInsightScheduler(): void {
+    // Check immediately on startup
+    this.checkAndSaveWeeklyInsight().catch(err => {
+      console.warn('[MealService] Initial weekly insight check failed:', err);
+    });
+
+    // Then check every 6 hours
+    this.weeklyInsightTimer = setInterval(() => {
+      this.checkAndSaveWeeklyInsight().catch(err => {
+        console.warn('[MealService] Scheduled weekly insight check failed:', err);
+      });
+    }, 6 * 60 * 60 * 1000); // 6 hours
+
+    console.log('[MealService] 📅 Weekly insight scheduler started (checks every 6h)');
+  }
+
+  /**
+   * Stop the weekly insight scheduler
+   */
+  private stopWeeklyInsightScheduler(): void {
+    if (this.weeklyInsightTimer) {
+      clearInterval(this.weeklyInsightTimer);
+      this.weeklyInsightTimer = null;
+    }
+  }
+
+  /**
+   * Check if we need to save weekly insight and do so if needed.
+   * 
+   * Logic:
+   * - Get the PREVIOUS week's date range (Mon-Sun)
+   * - Check if we already saved insight for that range (via local cache)
+   * - If not saved yet → calculate & queue for sync
+   */
+  private async checkAndSaveWeeklyInsight(): Promise<void> {
+    try {
+      const userId = await this.getCurrentUserId();
+
+      // Get PREVIOUS week range
+      const now = new Date();
+      const thisWeekStart = getWeekStart(now);
+      
+      // Previous week = 7 days before this week's start
+      const prevWeekStart = new Date(thisWeekStart);
+      prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+      const prevWeekEnd = new Date(thisWeekStart);
+      prevWeekEnd.setDate(prevWeekEnd.getDate() - 1);
+      prevWeekEnd.setHours(23, 59, 59, 999);
+
+      const startDateStr = prevWeekStart.toISOString();
+      const endDateStr = prevWeekEnd.toISOString();
+
+      // Check if already saved for this week
+      const alreadySaved = await MealOfflineAPI.isWeeklyInsightSaved(userId, startDateStr);
+      if (alreadySaved) {
+        console.log('[MealService] 📅 Weekly insight already saved for previous week');
+        return;
+      }
+
+      // Calculate insight for previous week
+      const insight = await MealOfflineAPI.getWeeklyInsights(userId, startDateStr, endDateStr);
+
+      // Only save if there were meals
+      if (insight.mealsCount === 0) {
+        console.log('[MealService] 📅 No meals in previous week, skipping insight save');
+        return;
+      }
+
+      // Save & queue for sync
+      await this.saveWeeklyInsightToDb(userId, startDateStr, insight);
+
+      console.log(`[MealService] 📅 ✅ Weekly insight saved for ${startDateStr.split('T')[0]}`);
+    } catch (error) {
+      // Don't throw — this is a background task
+      // "User not authenticated" is expected when not logged in
+      if (error instanceof Error && error.message === 'User not authenticated') {
+        return; // silently skip
+      }
+      console.warn('[MealService] Weekly insight check error:', error);
+    }
+  }
+
+  /**
+   * Save weekly insight to local cache and queue for Appwrite sync.
+   */
+  private async saveWeeklyInsightToDb(
+    userId: string,
+    startDate: string,
+    insight: WeeklyInsight
+  ): Promise<void> {
+    // 1. Save locally
+    await MealOfflineAPI.saveWeeklyInsightCache(userId, startDate, insight);
+
+    // 2. Queue for sync to Appwrite
+    try {
+      const syncManager = getSyncManager();
+      await syncManager.sync('meal', {
+        action: 'saveWeeklyInsight',
+        userId,
+        startDate,
+        insight,
+      });
+      console.log('[MealService] 📋 Weekly insight queued for sync');
+    } catch (syncErr) {
+      console.warn('[MealService] Failed to queue weekly insight sync:', syncErr);
+    }
+  }
+
+  /**
+   * ✅ Public: Force save current week's insight (manual trigger)
+   */
+  async saveCurrentWeekInsight(): Promise<{ success: boolean; message: string }> {
+    try {
+      const userId = await this.getCurrentUserId();
+      
+      const weekStart = getWeekStart();
+      const weekEnd = getWeekEnd();
+      const startDateStr = weekStart.toISOString();
+      const endDateStr = weekEnd.toISOString();
+
+      const insight = await MealOfflineAPI.getWeeklyInsights(userId, startDateStr, endDateStr);
+
+      if (insight.mealsCount === 0) {
+        return { success: false, message: 'Tidak ada data makanan minggu ini' };
+      }
+
+      await this.saveWeeklyInsightToDb(userId, startDateStr, insight);
+
+      return {
+        success: true,
+        message: `Insight minggu ini tersimpan (${insight.mealsCount} makanan)`,
+      };
+    } catch (error) {
+      console.error('[MealService] Save current week insight failed:', error);
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Gagal menyimpan insight',
+      };
+    }
   }
 
   // ===========================================================================
@@ -265,6 +446,11 @@ class MealService {
       await MealOfflineAPI.clearCart();
       console.log('[MealService] ✅ Cart cleared after submission');
 
+      // ✅ v2.2: Also trigger weekly insight update after submission
+      this.checkAndSaveWeeklyInsight().catch(err => {
+        console.warn('[MealService] Post-submit weekly insight update failed:', err);
+      });
+
       return {
         success: true,
         scan: localScan,
@@ -391,11 +577,11 @@ class MealService {
   }
 
   // ===========================================================================
-  // INSIGHTS & ANALYTICS (v2.1 - with balancedMealsCount)
+  // INSIGHTS & ANALYTICS (v2.2 - with DB save)
   // ===========================================================================
 
   /**
-   * ✅ v2.1: Get weekly insights with balancedMealsCount
+   * ✅ v2.2: Get weekly insights (unchanged read behavior)
    */
   async getWeeklyInsights(
     startDate?: string,
@@ -602,6 +788,14 @@ class MealService {
   clearCache(): void {
     MealOfflineAPI.clearCache();
     console.log('[MealService] Cache cleared');
+  }
+
+  /**
+   * ✅ v2.2: Cleanup — also stops scheduler
+   */
+  destroy(): void {
+    this.stopWeeklyInsightScheduler();
+    console.log('[MealService] Destroyed (scheduler stopped)');
   }
 
   // ===========================================================================

@@ -1,17 +1,16 @@
 /**
- * camera.tsx (v2.1 - AI Photo Analysis Flow)
+ * camera.tsx (v3.1 - Shows AnalysisResultCard after scan)
  * ---------------------------------------------------------------------------
  * Camera page with integrated AI food photo analysis.
- * 
- * v2.1 Changes:
- * • ✅ AI photo analysis via OpenRouter GPT-4.1
- * • ✅ Loading overlay during analysis
- * • ✅ Result card showing detected foods + nutrition
- * • ✅ Save analysis to scan history
+ *
+ * v3.1 Changes:
+ * ✅ After analysis, shows AnalysisResultCard instead of QueuedResultScreen
+ * ✅ AnalysisResultCard has "Lihat Riwayat" button to navigate to history
+ * ✅ Removed QueuedResultScreen sub-component
  * ---------------------------------------------------------------------------
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { router } from 'expo-router';
 import {
   View,
@@ -19,7 +18,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  Alert,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -30,32 +28,33 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import NetInfo from '@react-native-community/netinfo';
 
 import { CameraFacing, CapturedPhoto } from '@/app/types/camera';
+import { NutritionScan, AIDetectedFood } from '@/app/types/meal';
 import { CameraService } from '@/app/services/camera/cameraAPI';
 import { useCart } from '@/app/contexts/cartContext';
+import { useToast } from '@/app/components/useToast';
 import LoadingScreen from '@/app/components/loadingScreen';
 import AnalysisLoadingOverlay from '@/app/components/analysisLoadingOverlay';
 import AnalysisResultCard from '@/app/components/analysisResultCard';
+
+// ---------------------------------------------------------------------------
+// Main Component
+// ---------------------------------------------------------------------------
 
 export default function CameraPage() {
   const [facing, setFacing] = useState<CameraFacing>('back');
   const [permission, requestPermission] = useCameraPermissions();
   const [capturedImage, setCapturedImage] = useState<CapturedPhoto | null>(null);
   const [showCamera, setShowCamera] = useState(false);
+  const [isOnline, setIsOnline] = useState(false);
+  const [queuedScan, setQueuedScan] = useState<NutritionScan | null>(null);
+
   const cameraRef = useRef<CameraView>(null);
 
-  // ✅ v2.1: Analysis state from context
-  const { 
-    isAnalyzing, 
-    analysisResult, 
-    analyzePhoto, 
-    savePhotoAnalysis,
-    clearAnalysisResult,
-  } = useCart();
-  
-  const [isSaving, setIsSaving] = useState(false);
-  const [showResult, setShowResult] = useState(false);
+  const { isAnalyzing, analyzePhoto, clearAnalysisResult } = useCart();
+  const { showToast, ToastContainer } = useToast();
 
   // Animations
   const scaleButton = useSharedValue(1);
@@ -69,11 +68,29 @@ export default function CameraPage() {
     opacity: opacityFlash.value,
   }));
 
+  // ---------------------------------------------------------------------------
+  // Effects
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
-    (async () => {
-      await CameraService.requestGalleryPermission();
-    })();
+    // Request gallery permission on mount
+    CameraService.requestGalleryPermission();
+
+    // Check network status
+    NetInfo.fetch().then((state) => {
+      setIsOnline(state.isConnected === true && state.isInternetReachable === true);
+    });
+
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsOnline(state.isConnected === true && state.isInternetReachable === true);
+    });
+
+    return () => unsubscribe();
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Guards
+  // ---------------------------------------------------------------------------
 
   if (!permission) {
     return <LoadingScreen message="Memuat..." />;
@@ -100,9 +117,9 @@ export default function CameraPage() {
     );
   }
 
-  // =========================================================================
+  // ---------------------------------------------------------------------------
   // Handlers
-  // =========================================================================
+  // ---------------------------------------------------------------------------
 
   const handleShowFoodList = () => {
     router.push('/laukList');
@@ -122,128 +139,155 @@ export default function CameraPage() {
       );
 
       const photo = await CameraService.takePhoto(cameraRef.current);
-
       if (photo) {
         setCapturedImage(photo);
         setShowCamera(false);
       }
     } catch (error) {
-      console.error('Error mengambil foto:', error);
+      console.error('[CameraPage] Error mengambil foto:', error);
+      showToast({ type: 'error', title: 'Gagal mengambil foto', message: 'Silakan coba lagi.' });
     }
   };
 
   const handlePickImage = async () => {
     try {
       const photo = await CameraService.pickImageFromGallery();
-
       if (photo) {
         setCapturedImage(photo);
         setShowCamera(false);
       }
     } catch (error) {
-      console.error('Error memilih gambar:', error);
+      console.error('[CameraPage] Error memilih gambar:', error);
+      showToast({ type: 'error', title: 'Gagal memilih gambar', message: 'Silakan coba lagi.' });
     }
   };
 
   const handleOpenCamera = () => {
     setShowCamera(true);
     setCapturedImage(null);
+    setQueuedScan(null);
     clearAnalysisResult();
-    setShowResult(false);
   };
 
   const toggleCameraFacing = () => {
     setFacing((current) => (current === 'back' ? 'front' : 'back'));
   };
 
-  // ✅ v2.1: Analyze photo with AI
+  /**
+   * v3.1: After analysis, sets queuedScan to show AnalysisResultCard.
+   */
   const handleAnalyzePhoto = async () => {
     if (!capturedImage) return;
 
     try {
       const result = await analyzePhoto(capturedImage.uri);
-      
-      if (result.success) {
-        setShowResult(true);
-      } else {
-        Alert.alert(
-          'Analisis Gagal',
-          result.error || 'Tidak dapat menganalisis foto. Silakan coba lagi.',
-          [
-            { text: 'Coba Lagi', onPress: () => handleAnalyzePhoto() },
-            { text: 'Batal', style: 'cancel' },
-          ]
-        );
-      }
-    } catch (error) {
-      console.error('Error analyzing photo:', error);
-      Alert.alert('Error', 'Terjadi kesalahan saat menganalisis foto');
-    }
-  };
 
-  // ✅ v2.1: Save analysis result
-  const handleSaveAnalysis = async () => {
-    if (!analysisResult) return;
-
-    setIsSaving(true);
-    try {
-      const scan = await savePhotoAnalysis(analysisResult);
-      
-      if (scan) {
-        Alert.alert(
-          'Berhasil! 🎉',
-          'Hasil analisis telah disimpan ke riwayat.',
-          [{ text: 'OK', onPress: () => {
-            setShowResult(false);
-            setCapturedImage(null);
-            clearAnalysisResult();
-          }}]
-        );
-      } else {
-        Alert.alert('Error', 'Gagal menyimpan hasil analisis');
+      if (!result) {
+        showToast({
+          type: 'error',
+          title: 'Analisis Gagal',
+          message: 'Tidak dapat memproses foto. Silakan coba lagi.',
+          actions: [
+            { label: 'Coba Lagi', onPress: handleAnalyzePhoto },
+            { label: 'Batal', variant: 'ghost' },
+          ],
+        });
+        return;
       }
+
+      // ✅ Show analysis result card
+      setQueuedScan(result.scan);
+
+      showToast({
+        type: isOnline ? 'success' : 'warning',
+        title: isOnline ? 'Analisis selesai!' : 'Tersimpan (offline)',
+        message: result.message,
+        duration: 4000,
+      });
     } catch (error) {
-      console.error('Error saving analysis:', error);
-      Alert.alert('Error', 'Gagal menyimpan hasil analisis');
-    } finally {
-      setIsSaving(false);
+      console.error('[CameraPage] Error analyzing photo:', error);
+      showToast({
+        type: 'error',
+        title: 'Terjadi Kesalahan',
+        message: 'Gagal memproses foto. Silakan coba lagi.',
+      });
     }
   };
 
   const handleRetake = () => {
-    setShowResult(false);
+    setQueuedScan(null);
     setCapturedImage(null);
     clearAnalysisResult();
   };
 
-  const handleDismissResult = () => {
-    setShowResult(false);
+  const handleViewHistory = () => {
+    setQueuedScan(null);
     setCapturedImage(null);
     clearAnalysisResult();
+    router.push('/history');
   };
 
-  // =========================================================================
-  // RENDER: Analysis Result
-  // =========================================================================
+  /** Called when user taps "Simpan ke Riwayat" on the result card */
+  const handleSaveFromResult = () => {
+    // Scan is already auto-saved by the offline-first flow.
+    // Show confirmation and navigate to history.
+    showToast({
+      type: 'success',
+      title: 'Tersimpan!',
+      message: 'Hasil analisis sudah masuk ke riwayat.',
+      duration: 2000,
+    });
+    setTimeout(() => {
+      handleViewHistory();
+    }, 1500);
+  };
 
-  if (showResult && analysisResult && analysisResult.success && capturedImage) {
+  // ---------------------------------------------------------------------------
+  // RENDER: Analysis Result Screen (via AnalysisResultCard)
+  // ---------------------------------------------------------------------------
+
+  if (queuedScan && capturedImage) {
+    // NutritionScan has flat fields (calories, protein, carbs, fats, foodName).
+    // Map them to AnalysisResultCard's expected props.
+    const totalNutrition = {
+      calories: queuedScan.calories,
+      protein: queuedScan.protein,
+      carbs: queuedScan.carbs,
+      fats: queuedScan.fats,
+    };
+    const mealDescription = queuedScan.foodName ?? '';
+    // Create a single detected food entry from the scan data
+    const foods: AIDetectedFood[] = queuedScan.foodName
+      ? [
+          {
+            name: queuedScan.foodName,
+            estimatedGrams: 0,
+            confidence: 1,
+            nutrition: totalNutrition,
+          },
+        ]
+      : [];
+
     return (
-      <AnalysisResultCard
-        photoUri={capturedImage.uri}
-        foods={analysisResult.foods}
-        totalNutrition={analysisResult.totalNutrition}
-        mealDescription={analysisResult.mealDescription}
-        onSave={handleSaveAnalysis}
-        onRetake={handleRetake}
-        onDismiss={handleDismissResult}
-        isSaving={isSaving}
-      />
+      <View className="flex-1">
+        <AnalysisResultCard
+          photoUri={capturedImage.uri}
+          foods={foods}
+          totalNutrition={totalNutrition}
+          mealDescription={mealDescription}
+          onSave={handleSaveFromResult}
+          onRetake={handleRetake}
+          onDismiss={handleRetake}
+          onViewHistory={handleViewHistory}
+        />
+        <ToastContainer />
+      </View>
     );
   }
 
-  // =========================================================================
+  // ---------------------------------------------------------------------------
   // RENDER: Camera Mode
-  // =========================================================================
+  // ---------------------------------------------------------------------------
 
   if (showCamera && !capturedImage) {
     return (
@@ -302,21 +346,19 @@ export default function CameraPage() {
             activeOpacity={0.75}
           >
             <Ionicons name="image" size={20} color="#333333" />
-            <Text className="text-gray-900 font-semibold text-base">
-              Pilih dari Galeri
-            </Text>
+            <Text className="text-gray-900 font-semibold text-base">Pilih dari Galeri</Text>
           </TouchableOpacity>
         </View>
 
-        {/* ✅ Analysis Loading Overlay */}
         <AnalysisLoadingOverlay visible={isAnalyzing} />
+        <ToastContainer />
       </View>
     );
   }
 
-  // =========================================================================
+  // ---------------------------------------------------------------------------
   // RENDER: Default View
-  // =========================================================================
+  // ---------------------------------------------------------------------------
 
   return (
     <ScrollView
@@ -325,12 +367,8 @@ export default function CameraPage() {
     >
       {/* Header */}
       <View className="bg-surface px-6 py-4 shadow-sm">
-        <Text className="text-2xl font-bold text-text-primary">
-          Pindai Makanan
-        </Text>
-        <Text className="text-sm text-text-secondary mt-1">
-          Ambil foto untuk analisis nutrisi AI
-        </Text>
+        <Text className="text-2xl font-bold text-text-primary">Pindai Makanan</Text>
+        <Text className="text-sm text-text-secondary mt-1">Ambil foto untuk analisis nutrisi AI</Text>
       </View>
 
       {/* Camera Preview Area */}
@@ -353,11 +391,7 @@ export default function CameraPage() {
                   />
                 </View>
                 <View className="absolute inset-0 items-center justify-center">
-                  <MaterialIcons
-                    name="document-scanner"
-                    size={64}
-                    color="rgba(255,255,255,0.7)"
-                  />
+                  <MaterialIcons name="document-scanner" size={64} color="rgba(255,255,255,0.7)" />
                 </View>
               </>
             )}
@@ -387,9 +421,7 @@ export default function CameraPage() {
                   activeOpacity={0.75}
                 >
                   <Ionicons name="trash" size={20} color="#333333" />
-                  <Text className="text-text-primary font-semibold text-base">
-                    Hapus Foto
-                  </Text>
+                  <Text className="text-text-primary font-semibold text-base">Hapus Foto</Text>
                 </TouchableOpacity>
               </>
             ) : (
@@ -400,9 +432,7 @@ export default function CameraPage() {
                   activeOpacity={0.75}
                 >
                   <Ionicons name="camera" size={22} color="#fff" />
-                  <Text className="text-text-inverse font-semibold text-base">
-                    Ambil Foto
-                  </Text>
+                  <Text className="text-text-inverse font-semibold text-base">Ambil Foto</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -411,9 +441,7 @@ export default function CameraPage() {
                   activeOpacity={0.75}
                 >
                   <Ionicons name="image" size={20} color="#333333" />
-                  <Text className="text-text-primary font-semibold text-base">
-                    Pilih dari Galeri
-                  </Text>
+                  <Text className="text-text-primary font-semibold text-base">Pilih dari Galeri</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -431,8 +459,18 @@ export default function CameraPage() {
           </View>
         </View>
 
-        {/* Info Box */}
-        <View className="mt-6 w-full max-w-md bg-input border border-border rounded-xl p-4 flex-row">
+        {/* Offline indicator */}
+        {!isOnline && (
+          <View className="mt-4 w-full max-w-md bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-3 flex-row items-center gap-3">
+            <Ionicons name="cloud-offline-outline" size={18} color="#ffa726" />
+            <Text className="text-yellow-800 text-xs flex-1">
+              Mode offline — foto akan dianalisis saat kembali online
+            </Text>
+          </View>
+        )}
+
+        {/* Tips box */}
+        <View className="mt-4 w-full max-w-md bg-input border border-border rounded-xl p-4 flex-row">
           <Ionicons
             name="information-circle"
             size={20}
@@ -443,24 +481,16 @@ export default function CameraPage() {
             <Text className="text-text-primary font-semibold text-sm mb-1">
               Tips untuk hasil terbaik:
             </Text>
-            <Text className="text-text-secondary text-xs">
-              • Pastikan pencahayaan baik
-            </Text>
-            <Text className="text-text-secondary text-xs">
-              • Pusatkan makanan dalam bingkai
-            </Text>
-            <Text className="text-text-secondary text-xs">
-              • Tangkap seluruh makanan
-            </Text>
-            <Text className="text-text-secondary text-xs">
-              • Hindari bayangan dan silau
-            </Text>
+            <Text className="text-text-secondary text-xs">• Pastikan pencahayaan baik</Text>
+            <Text className="text-text-secondary text-xs">• Pusatkan makanan dalam bingkai</Text>
+            <Text className="text-text-secondary text-xs">• Tangkap seluruh makanan</Text>
+            <Text className="text-text-secondary text-xs">• Hindari bayangan dan silau</Text>
           </View>
         </View>
       </View>
 
-      {/* ✅ Analysis Loading Overlay */}
       <AnalysisLoadingOverlay visible={isAnalyzing} />
+      <ToastContainer />
     </ScrollView>
   );
 }
