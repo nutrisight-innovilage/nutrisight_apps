@@ -1,10 +1,3 @@
-/**
- * config/env.ts
- * ---------------------------------------------------------------------------
- * Type-safe environment variables
- * ---------------------------------------------------------------------------
- */
-
 import Constants from 'expo-constants';
 
 interface EnvConfig {
@@ -21,24 +14,11 @@ interface EnvConfig {
   };
 }
 
-
-export {};
-
-const getEnvVar = (key: string, defaultValue?: string): string => {
-  const value = process.env[key] || defaultValue;
-  
-  if (!value) {
-    throw new Error(`Environment variable ${key} is not defined`);
-  }
-  
-  return value;
-};
-
 export const env: EnvConfig = {
   appwrite: {
-    endpoint: getEnvVar('EXPO_PUBLIC_APPWRITE_ENDPOINT', 'https://cloud.appwrite.io/v1'),
-    projectId: getEnvVar('EXPO_PUBLIC_APPWRITE_PROJECT_ID'),
-    databaseId: getEnvVar('EXPO_PUBLIC_APPWRITE_DATABASE_ID', 'nutrition_db'),
+    endpoint: process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1',
+    projectId: process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID || '',
+    databaseId: process.env.EXPO_PUBLIC_APPWRITE_DATABASE_ID || 'nutrition_db',
   },
   isDevelopment: process.env.NODE_ENV === 'development',
   isProduction: process.env.NODE_ENV === 'production',

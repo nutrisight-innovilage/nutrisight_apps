@@ -246,64 +246,50 @@ export const authOnlineAPI = {
    * Update user profile (FIXED)
    * NOTE: Email update requires separate function with password
    */
-  updateUser: async (
-    userId: string,
-    userData: UpdateUserRequest,
-    token: string
-  ): Promise<AuthResponse> => {
-    try {
-      console.log('[authOnlineAPI] Updating user profile...');
+ updateUser: async (
+  userId: string,        // ← ini bisa salah
+  userData: UpdateUserRequest,
+  token: string
+): Promise<AuthResponse> => {
+  try {
+    // Ambil user ID yang benar dari Appwrite
+    const currentAccount = await account.get();
+    const actualUserId = currentAccount.$id;  // ← pakai ini
 
-      // Set session
-      appwriteService.setSession(token);
-
-      // Update account name if provided
-      if (userData.name) {
-        await account.updateName(userData.name);
-      }
-
-      // ✅ FIXED: Email update removed from here
-      // Email update requires password verification (see updateEmail function below)
-      if (userData.email) {
-        console.warn('[authOnlineAPI] Email update requires password - use updateEmail() instead');
-      }
-
-      // Update user document in database
-      try {
-        const updateData: any = {
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Only include fields that are provided
-        if (userData.name !== undefined) updateData.name = userData.name;
-        if (userData.phone !== undefined) updateData.phone = userData.phone;
-        if (userData.age !== undefined) updateData.age = userData.age;
-        if (userData.weight !== undefined) updateData.weight = userData.weight;
-        if (userData.height !== undefined) updateData.height = userData.height;
-        if (userData.gender !== undefined) updateData.gender = userData.gender;
-        if (userData.role !== undefined) updateData.role = userData.role;
-
-        await databases.updateDocument(
-          DATABASE_ID,
-          COLLECTIONS.USERS,
-          userId,
-          updateData
-        );
-      } catch (dbError) {
-        console.error('[authOnlineAPI] Failed to update user document:', dbError);
-      }
-
-      // Get updated user data
-      const session = await account.getSession('current');
-      const authResponse = await createAuthResponse(session);
-
-      console.log('[authOnlineAPI] ✅ User profile updated successfully');
-      return authResponse;
-    } catch (error) {
-      console.error('[authOnlineAPI] Update user error:', error);
-      throw handleAppwriteError(error);
+    if (userData.name) {
+      await account.updateName(userData.name);
     }
-  },
+
+    try {
+      const updateData: any = {
+        updatedAt: new Date().toISOString(),
+      };
+      if (userData.name !== undefined) updateData.name = userData.name;
+      if (userData.phone !== undefined) updateData.phone = userData.phone;
+      if (userData.age !== undefined) updateData.age = userData.age;
+      if (userData.weight !== undefined) updateData.weight = userData.weight;
+      if (userData.height !== undefined) updateData.height = userData.height;
+      if (userData.gender !== undefined) updateData.gender = userData.gender;
+      if (userData.role !== undefined) updateData.role = userData.role;
+
+      await databases.updateDocument(
+        DATABASE_ID,
+        COLLECTIONS.USERS,
+        actualUserId,          // ← pakai ID dari Appwrite, bukan parameter
+        updateData
+      );
+    } catch (dbError) {
+      console.error('[authOnlineAPI] Failed to update user document:', dbError);
+    }
+
+    const session = await account.getSession('current');
+    const authResponse = await createAuthResponse(session);
+    return authResponse;
+  } catch (error) {
+    console.error('[authOnlineAPI] Update user error:', error);
+    throw handleAppwriteError(error);
+  }
+},
 
   /**
    * ✅ NEW: Update email (requires password)
@@ -355,13 +341,15 @@ export const authOnlineAPI = {
 
       // Set session
       appwriteService.setSession(token);
+      const currentAccount = await account.get();
+      const actualUserId = currentAccount.$id;
 
       // 1. Delete user profile document from database
       try {
         await databases.deleteDocument(
           DATABASE_ID,
           COLLECTIONS.USERS,
-          userId
+          actualUserId  
         );
         console.log('[authOnlineAPI] ✅ User profile deleted');
       } catch (dbError) {
@@ -440,6 +428,7 @@ export const authOnlineAPI = {
     try {
       console.log('[authOnlineAPI] Changing password...');
 
+
       // Set session
       appwriteService.setSession(token);
 
@@ -482,8 +471,11 @@ export const authOnlineAPI = {
   ): Promise<void> => {
     try {
       console.log('[authOnlineAPI] Resetting password...');
+      
+      const currentAccount = await account.get();
+      const actualUserId = currentAccount.$id;
 
-      await account.updateRecovery(userId, secret, newPassword);
+      await account.updateRecovery(actualUserId, secret, newPassword);
 
       console.log('[authOnlineAPI] ✅ Password reset successfully');
     } catch (error) {

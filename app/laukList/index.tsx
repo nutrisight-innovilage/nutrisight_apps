@@ -45,47 +45,49 @@ const MenuItem = memo<{
 MenuItem.displayName = 'MenuItem';
 
 // Memoized CategoryFilter Component
-const CategoryFilter = memo<{
+const CategoryFilter = ({ 
+  categories, 
+  selectedCategory, 
+  onSelectCategory 
+}: {
   categories: string[];
   selectedCategory: string;
   onSelectCategory: (category: string) => void;
-}>(({ categories, selectedCategory, onSelectCategory }) => {
+}) => {
   return (
-    <Animated.View entering={FadeInUp.delay(200).duration(600)}>
-      <View className="bg-surface-light border-b border-border-light">
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          className="py-3 px-4"
-          contentContainerStyle={{ paddingRight: 16 }}
-        >
-          {categories.map((category) => (
-            <TouchableOpacity
-              key={category}
-              onPress={() => onSelectCategory(category)}
-              className={`mr-3 px-5 py-2.5 rounded-full ${
+    <View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        className="py-3 px-4"
+        contentContainerStyle={{ paddingRight: 16 }}
+      >
+        {categories.map((category) => (
+          <TouchableOpacity
+            key={category}
+            onPress={() => onSelectCategory(category)}
+            className={`mr-3 px-5 py-2.5 rounded-full ${
+              selectedCategory === category
+                ? 'bg-primary-light shadow-sm'
+                : 'bg-overlay-light border border-border-light'
+            }`}
+            activeOpacity={0.7}
+          >
+            <Text
+              className={`font-semibold text-sm ${
                 selectedCategory === category
-                  ? 'bg-primary-light shadow-sm'
-                  : 'bg-overlay-light border border-border-light'
+                  ? 'text-text-inverse-light'
+                  : 'text-text-primary-light'
               }`}
-              activeOpacity={0.7}
             >
-              <Text
-                className={`font-semibold text-sm ${
-                  selectedCategory === category
-                    ? 'text-text-inverse-light'
-                    : 'text-text-primary-light'
-                }`}
-              >
-                {category}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-    </Animated.View>
+              {category}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
   );
-});
+};
 
 CategoryFilter.displayName = 'CategoryFilter';
 
@@ -249,12 +251,19 @@ const MenuPage = () => {
         />
       </Animated.View>
 
-      {/* Filter Kategori */}
+      {/* Filter Kategori masih menimbulkan error navigation, disimpan dulu*/}
+      {/* 
+      
       <CategoryFilter 
         categories={categories}
         selectedCategory={selectedCategory}
         onSelectCategory={handleSelectCategory}
       />
+      
+      
+      
+      */}
+      
 
       {/* Sort & Result Count */}
       <Animated.View entering={FadeInUp.delay(300).duration(600)}>

@@ -20,7 +20,7 @@ import { UserRole } from '@/app/types/user';
 // ---------------------------------------------------------------------------
 
 type GenderOption = 'male' | 'female';
-type RoleOption = UserRole; // 'ibu hamil' | 'anak anak' | 'remaja' | 'dewasa' | 'lansia'
+type RoleOption = UserRole;
 
 interface GenderChoice {
   value: GenderOption;
@@ -50,6 +50,170 @@ const ROLE_OPTIONS: RoleChoice[] = [
   { value: 'ibu hamil', label: 'Ibu Hamil', icon: 'heart-outline' },
   { value: 'remaja', label: 'Remaja', icon: 'school-outline' },
 ];
+
+// ---------------------------------------------------------------------------
+// Sub-components (OUTSIDE main component to prevent remount on re-render)
+// ---------------------------------------------------------------------------
+
+/** Read-only field */
+const ReadOnlyField = ({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) => (
+  <View className="flex-row items-center py-3 border-b border-border">
+    <View className="w-9 h-9 rounded-full bg-overlay items-center justify-center mr-3">
+      <Ionicons name={icon} size={18} color="#6B7280" />
+    </View>
+    <View className="flex-1">
+      <Text className="text-[11px] text-text-secondary uppercase tracking-widest mb-0.5">
+        {label}
+      </Text>
+      <Text className="text-[15px] text-text-primary">{value || '-'}</Text>
+    </View>
+  </View>
+);
+
+/** Editable text field */
+const EditField = ({
+  label,
+  value,
+  onChangeText,
+  icon,
+  placeholder,
+  keyboardType = 'default',
+  suffix,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  icon: keyof typeof Ionicons.glyphMap;
+  placeholder?: string;
+  keyboardType?: TextInput['props']['keyboardType'];
+  suffix?: string;
+}) => (
+  <View className="mb-4">
+    <Text className="text-[11px] text-text-secondary uppercase tracking-widest mb-1.5 ml-1">
+      {label}
+    </Text>
+    <View className="flex-row items-center bg-input rounded-xl border border-border px-3">
+      <Ionicons name={icon} size={18} color="#6B7280" />
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        keyboardType={keyboardType}
+        className="flex-1 py-3 px-3 text-[15px] text-text-primary"
+        placeholderTextColor="#9CA3AF"
+      />
+      {suffix && (
+        <Text className="text-[13px] text-text-secondary">{suffix}</Text>
+      )}
+    </View>
+  </View>
+);
+
+/** Picker button (gender / role) */
+const PickerButton = ({
+  label,
+  value,
+  icon,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+}) => (
+  <View className="mb-4">
+    <Text className="text-[11px] text-text-secondary uppercase tracking-widest mb-1.5 ml-1">
+      {label}
+    </Text>
+    <TouchableOpacity
+      onPress={onPress}
+      className="flex-row items-center bg-input rounded-xl border border-border px-3 py-3"
+      activeOpacity={0.7}
+    >
+      <Ionicons name={icon} size={18} color="#6B7280" />
+      <Text className="flex-1 px-3 text-[15px] text-text-primary">
+        {value}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#9CA3AF" />
+    </TouchableOpacity>
+  </View>
+);
+
+/** Bottom-sheet style picker modal */
+function OptionModal<T extends string>({
+  visible,
+  onClose,
+  title,
+  options,
+  selected,
+  onSelect,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  title: string;
+  options: { value: T; label: string; icon: keyof typeof Ionicons.glyphMap }[];
+  selected: T;
+  onSelect: (v: T) => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity
+        className="flex-1 bg-black/40 justify-end"
+        activeOpacity={1}
+        onPress={onClose}
+      >
+        <View className="bg-surface rounded-t-3xl px-5 pt-5 pb-8">
+          <View className="w-10 h-1 rounded-full bg-border self-center mb-4" />
+          <Text className="text-base font-semibold text-text-primary mb-4">
+            {title}
+          </Text>
+          {options.map((opt) => {
+            const isActive = opt.value === selected;
+            return (
+              <TouchableOpacity
+                key={opt.value}
+                onPress={() => {
+                  onSelect(opt.value);
+                  onClose();
+                }}
+                className={`flex-row items-center px-4 py-3.5 rounded-xl mb-2 ${
+                  isActive ? 'bg-primary/10 border border-primary' : 'bg-overlay'
+                }`}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={opt.icon}
+                  size={20}
+                  color={isActive ? '#16A34A' : '#6B7280'}
+                />
+                <Text
+                  className={`flex-1 ml-3 text-[15px] ${
+                    isActive
+                      ? 'font-semibold text-primary'
+                      : 'text-text-primary'
+                  }`}
+                >
+                  {opt.label}
+                </Text>
+                {isActive && (
+                  <Ionicons name="checkmark-circle" size={20} color="#16A34A" />
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -119,7 +283,6 @@ export default function ProfilPage() {
       return;
     }
 
-    // Validasi
     if (!nama.trim()) {
       Alert.alert('Validasi', 'Nama tidak boleh kosong');
       return;
@@ -192,171 +355,6 @@ export default function ProfilPage() {
       .slice(0, 2);
   };
 
-  // -------------------------------------------------------------------------
-  // Render helpers
-  // -------------------------------------------------------------------------
-
-  /** Read-only field */
-  const ReadOnlyField = ({
-    label,
-    value,
-    icon,
-  }: {
-    label: string;
-    value: string;
-    icon: keyof typeof Ionicons.glyphMap;
-  }) => (
-    <View className="flex-row items-center py-3 border-b border-border">
-      <View className="w-9 h-9 rounded-full bg-overlay items-center justify-center mr-3">
-        <Ionicons name={icon} size={18} color="#6B7280" />
-      </View>
-      <View className="flex-1">
-        <Text className="text-[11px] text-text-secondary uppercase tracking-widest mb-0.5">
-          {label}
-        </Text>
-        <Text className="text-[15px] text-text-primary">{value || '-'}</Text>
-      </View>
-    </View>
-  );
-
-  /** Editable text field */
-  const EditField = ({
-    label,
-    value,
-    onChangeText,
-    icon,
-    placeholder,
-    keyboardType = 'default',
-    suffix,
-  }: {
-    label: string;
-    value: string;
-    onChangeText: (t: string) => void;
-    icon: keyof typeof Ionicons.glyphMap;
-    placeholder?: string;
-    keyboardType?: TextInput['props']['keyboardType'];
-    suffix?: string;
-  }) => (
-    <View className="mb-4">
-      <Text className="text-[11px] text-text-secondary uppercase tracking-widest mb-1.5 ml-1">
-        {label}
-      </Text>
-      <View className="flex-row items-center bg-input rounded-xl border border-border px-3">
-        <Ionicons name={icon} size={18} color="#6B7280" />
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          keyboardType={keyboardType}
-          className="flex-1 py-3 px-3 text-[15px] text-text-primary"
-          placeholderTextColor="#9CA3AF"
-        />
-        {suffix && (
-          <Text className="text-[13px] text-text-secondary">{suffix}</Text>
-        )}
-      </View>
-    </View>
-  );
-
-  /** Picker button (gender / role) */
-  const PickerButton = ({
-    label,
-    value,
-    icon,
-    onPress,
-  }: {
-    label: string;
-    value: string;
-    icon: keyof typeof Ionicons.glyphMap;
-    onPress: () => void;
-  }) => (
-    <View className="mb-4">
-      <Text className="text-[11px] text-text-secondary uppercase tracking-widest mb-1.5 ml-1">
-        {label}
-      </Text>
-      <TouchableOpacity
-        onPress={onPress}
-        className="flex-row items-center bg-input rounded-xl border border-border px-3 py-3"
-        activeOpacity={0.7}
-      >
-        <Ionicons name={icon} size={18} color="#6B7280" />
-        <Text className="flex-1 px-3 text-[15px] text-text-primary">
-          {value}
-        </Text>
-        <Ionicons name="chevron-down" size={16} color="#9CA3AF" />
-      </TouchableOpacity>
-    </View>
-  );
-
-  // -------------------------------------------------------------------------
-  // Bottom-sheet style picker modal
-  // -------------------------------------------------------------------------
-
-  const OptionModal = <T extends string>({
-    visible,
-    onClose,
-    title,
-    options,
-    selected,
-    onSelect,
-  }: {
-    visible: boolean;
-    onClose: () => void;
-    title: string;
-    options: { value: T; label: string; icon: keyof typeof Ionicons.glyphMap }[];
-    selected: T;
-    onSelect: (v: T) => void;
-  }) => (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity
-        className="flex-1 bg-black/40 justify-end"
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <View className="bg-surface rounded-t-3xl px-5 pt-5 pb-8">
-          <View className="w-10 h-1 rounded-full bg-border self-center mb-4" />
-          <Text className="text-base font-semibold text-text-primary mb-4">
-            {title}
-          </Text>
-          {options.map((opt) => {
-            const isActive = opt.value === selected;
-            return (
-              <TouchableOpacity
-                key={opt.value}
-                onPress={() => {
-                  onSelect(opt.value);
-                  onClose();
-                }}
-                className={`flex-row items-center px-4 py-3.5 rounded-xl mb-2 ${
-                  isActive ? 'bg-primary/10 border border-primary' : 'bg-overlay'
-                }`}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name={opt.icon}
-                  size={20}
-                  color={isActive ? '#16A34A' : '#6B7280'}
-                />
-                <Text
-                  className={`flex-1 ml-3 text-[15px] ${
-                    isActive
-                      ? 'font-semibold text-primary'
-                      : 'text-text-primary'
-                  }`}
-                >
-                  {opt.label}
-                </Text>
-                {isActive && (
-                  <Ionicons name="checkmark-circle" size={20} color="#16A34A" />
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
-
   // =========================================================================
   // RENDER
   // =========================================================================
@@ -395,6 +393,7 @@ export default function ProfilPage() {
         className="flex-1"
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {/* ── Avatar ────────────────────────────────────────────────────── */}
         <View className="items-center mt-4 mb-6">
@@ -414,7 +413,6 @@ export default function ProfilPage() {
             ================================================================ */}
         {!isEditing && (
           <>
-            {/* ── Data Pribadi ───────────────────────────────────────────── */}
             <View className="bg-surface rounded-2xl p-4 mb-4" style={{ elevation: 2 }}>
               <Text className="text-xs font-semibold text-text-secondary uppercase tracking-widest mb-2">
                 Data Pribadi
@@ -427,30 +425,16 @@ export default function ProfilPage() {
               <ReadOnlyField label="Kategori" value={roleLabel} icon="people-outline" />
             </View>
 
-            {/* ── Data Kesehatan ─────────────────────────────────────────── */}
             <View className="bg-surface rounded-2xl p-4 mb-4" style={{ elevation: 2 }}>
               <Text className="text-xs font-semibold text-text-secondary uppercase tracking-widest mb-2">
                 Data Kesehatan
               </Text>
 
-              <ReadOnlyField
-                label="Umur"
-                value={umur ? `${umur} tahun` : '-'}
-                icon="calendar-outline"
-              />
-              <ReadOnlyField
-                label="Berat Badan"
-                value={berat ? `${berat} kg` : '-'}
-                icon="barbell-outline"
-              />
-              <ReadOnlyField
-                label="Tinggi Badan"
-                value={tinggi ? `${tinggi} cm` : '-'}
-                icon="resize-outline"
-              />
+              <ReadOnlyField label="Umur" value={umur ? `${umur} tahun` : '-'} icon="calendar-outline" />
+              <ReadOnlyField label="Berat Badan" value={berat ? `${berat} kg` : '-'} icon="barbell-outline" />
+              <ReadOnlyField label="Tinggi Badan" value={tinggi ? `${tinggi} cm` : '-'} icon="resize-outline" />
             </View>
 
-            {/* ── Informasi Akun ─────────────────────────────────────────── */}
             <View className="bg-surface rounded-2xl p-4" style={{ elevation: 2 }}>
               <Text className="text-xs font-semibold text-text-secondary uppercase tracking-widest mb-2">
                 Informasi Akun
@@ -492,7 +476,6 @@ export default function ProfilPage() {
             ================================================================ */}
         {isEditing && (
           <>
-            {/* ── Data Pribadi ───────────────────────────────────────────── */}
             <View className="bg-surface rounded-2xl p-4 mb-4" style={{ elevation: 2 }}>
               <Text className="text-xs font-semibold text-text-secondary uppercase tracking-widest mb-3">
                 Data Pribadi
@@ -536,7 +519,6 @@ export default function ProfilPage() {
               />
             </View>
 
-            {/* ── Data Kesehatan ─────────────────────────────────────────── */}
             <View className="bg-surface rounded-2xl p-4 mb-4" style={{ elevation: 2 }}>
               <Text className="text-xs font-semibold text-text-secondary uppercase tracking-widest mb-3">
                 Data Kesehatan
@@ -571,7 +553,6 @@ export default function ProfilPage() {
               />
             </View>
 
-            {/* ── Action buttons ─────────────────────────────────────────── */}
             <View className="flex-row" style={{ gap: 12 }}>
               <TouchableOpacity
                 onPress={handleCancel}

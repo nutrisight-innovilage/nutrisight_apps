@@ -137,7 +137,8 @@ class AppwriteService {
    * Set session token (for authenticated requests)
    */
   public setSession(sessionToken: string): void {
-    this.client.setJWT(sessionToken);
+    //this.client.setJWT(sessionToken);
+    
     if (__DEV__) {
       console.log('[Appwrite] Session token set');
     }
@@ -147,7 +148,7 @@ class AppwriteService {
    * Clear session
    */
   public clearSession(): void {
-    this.client.setJWT('');
+    //this.client.setJWT('');
     if (__DEV__) {
       console.log('[Appwrite] Session cleared');
     }

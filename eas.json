@@ -1,0 +1,52 @@
+{
+  "cli": {
+    "version": ">= 18.0.3",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "channel": "development",
+      "env": {
+        "APP_ENV": "development",
+        "EXPO_PUBLIC_APPWRITE_ENDPOINT": "https://sgp.cloud.appwrite.io/v1",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_ID": "69905723002c61886148",
+        "EXPO_PUBLIC_APPWRITE_DATABASE_ID": "699181b8003cf43f485e",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_NAME": "nutrisight",
+        "EXPO_PUBLIC_OPENROUTER_API_KEY": "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"
+      }
+
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "channel": "preview",
+      "env": {
+        "APP_ENV": "preview",
+        "EXPO_PUBLIC_APPWRITE_ENDPOINT": "https://sgp.cloud.appwrite.io/v1",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_ID": "69905723002c61886148",
+        "EXPO_PUBLIC_APPWRITE_DATABASE_ID": "699181b8003cf43f485e",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_NAME": "nutrisight",
+        "EXPO_PUBLIC_OPENROUTER_API_KEY": "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"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": { "buildType": "apk" },
+      "channel": "production",
+      "env": {
+        "APP_ENV": "production",
+        "EXPO_PUBLIC_APPWRITE_ENDPOINT": "https://sgp.cloud.appwrite.io/v1",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_ID": "69905723002c61886148",
+        "EXPO_PUBLIC_APPWRITE_DATABASE_ID": "699181b8003cf43f485e",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_NAME": "nutrisight",
+        "EXPO_PUBLIC_OPENROUTER_API_KEY": "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"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

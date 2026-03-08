@@ -1,15 +1,20 @@
 {
-    
   "expo": {
     "name": "Nutrisight",
     "slug": "Nutrisight",
     "scheme": "nutrisight",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/images/nutrisight.jpg",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/869a046d-5431-43e0-829c-842f00cf7407"
+    },
+    "icon": "./assets/images/nutrisight-notification.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/images/nutrisight.jpg",
+      "image": "./assets/images/nutrisight.png",
       "resizeMode": "contain",
       "backgroundColor": "#37B37E"
     },
@@ -29,23 +34,24 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/nutrisight.jpg",
+        "foregroundImage": "./assets/images/nutrisight-notification.png",
         "backgroundColor": "#37B37E"
       },
       "package": "com.innovilage.nutrisight",
       "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE",
-        "READ_MEDIA_IMAGES",
-        "READ_MEDIA_VIDEO",
-        "NOTIFICATIONS",
-        "POST_NOTIFICATIONS",
-        "VIBRATE",
-        "ACCESS_NETWORK_STATE",
-        "SCHEDULE_EXACT_ALARM",
-  "RECEIVE_BOOT_COMPLETED",
-        "INTERNET"
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.NOTIFICATIONS",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.INTERNET",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -74,7 +80,13 @@
           "color": "#dcfce7",
           "sounds": []
         }
-      ]
-    ]
+      ],
+      "expo-router"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "869a046d-5431-43e0-829c-842f00cf7407"
+      }
+    }
   }
 }
