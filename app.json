@@ -26,7 +26,7 @@
       "bundleIdentifier": "com.innovilage.nutrisight",
       "infoPlist": {
         "NSCameraUsageDescription": "Aplikasi ini memerlukan akses kamera untuk mengambil foto.",
-        "NSMicrophoneUsageDescription": "Aplikasi ini memerlukan akses mikrofon untuk merekam video.",
+        
         "NSPhotoLibraryUsageDescription": "Aplikasi ini memerlukan akses galeri untuk memilih foto.",
         "NSPhotoLibraryAddUsageDescription": "Aplikasi ini memerlukan akses untuk menyimpan foto ke galeri.",
         "NSUserTrackingUsageDescription": "Data ini digunakan untuk memberikan pengalaman yang lebih baik."
@@ -50,8 +50,7 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.RECEIVE_BOOT_COMPLETED",
-        "android.permission.INTERNET",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.INTERNET"
       ]
     },
     "web": {
@@ -61,9 +60,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Izinkan $(PRODUCT_NAME) mengakses kamera Anda",
-          "microphonePermission": "Izinkan $(PRODUCT_NAME) mengakses mikrofon Anda",
-          "recordAudioAndroid": true
+          "cameraPermission": "Izinkan $(PRODUCT_NAME) mengakses kamera Anda"
+          
         }
       ],
       [

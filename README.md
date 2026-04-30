@@ -1,55 +1,32 @@
+# NutriSight — Pelacak Nutrisi AI untuk Semua Usia 🥗
 
-# Welcome to your Expo app 👋
+## Problem
+Orang tahu mereka harus makan bergizi, tapi terlalu ribet untuk mencatat. Aplikasi yang ada butuh koneksi stabil, database makanan Indonesia-nya tipis, dan antarmukanya dirancang untuk atlet — bukan orang biasa.
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+## Solution
+Aplikasi mobile yang membuat pencatatan nutrisi semudah foto selfie:
+- **Foto makanan → AI hitung kalori, protein, karbo, lemak** — tidak perlu cari nama makanan
+- **Offline-first**: semua aksi langsung tercatat meskipun tidak ada sinyal — sync ke cloud terjadi otomatis di background
+- Katalog menu Indonesia lokal yang nutrisinya dihitung dari resep asli, bukan estimasi asal
+- Ringkasan mingguan otomatis dari AI — tanpa perlu baca grafik sendiri
+- Dirancang untuk semua usia: anak-anak, remaja, dewasa, lansia, ibu hamil
 
-## Get started
+## Result
+- Tracking nutrisi harian tanpa hambatan — tidak ada spinner, tidak ada error jaringan
+- Data tetap aman meskipun tiba-tiba tidak ada sinyal di tengah jalan
+- Pengguna lebih sadar pola makan tanpa harus jadi ahli gizi
 
-1. Install dependencies
+## Demo
+(screenshot halaman scan foto + beranda statistik + riwayat harian)
+> ![halaman gizi](assets/images/contoh-tampilan-apk/nutrisight.png)
 
-   ```bash
-   npm install
-   ```
+> ![halaman scan foto](assets/images/contoh-tampilan-apk/nutrisight%203.png)
 
-2. Start the app
+> ![halaman menu](assets/images/contoh-tampilan-apk/nutrisight%202.png)
+## Use Cases
+- Keluarga yang ingin memantau asupan gizi sehari-hari
+- Ibu hamil dan lansia dengan kebutuhan nutrisi khusus
+- Siapa saja yang mau lebih sadar makan tapi tidak mau repot
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
-=======
-# nutrisight_apps
-nutrisight apps with react native / expo
-
+## Tech
+React Native, Expo, TypeScript, Appwrite, OpenRouter (GPT-4o), NativeWind
